@@ -176,17 +176,32 @@ struct IOSJellyfinDetailView: View {
 
     private var episodeSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("Episodes").font(.title2.bold())
-                Spacer()
-                if seasons.count > 1 {
-                    Picker("Season", selection: $selectedSeason) {
-                        ForEach(seasons, id: \.self) { Text("Season \($0)").tag($0) }
+            Text("Episodes").font(.title2.bold()).padding(.horizontal, 22)
+
+            if seasons.count > 1 {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(seasons, id: \.self) { season in
+                            Button {
+                                withAnimation(.snappy(duration: 0.26)) { selectedSeason = season }
+                            } label: {
+                                Text("Season \(season)")
+                                    .font(.subheadline.weight(.semibold))
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 9)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(selectedSeason == season ? Color.black : Color.primary)
+                            .background(selectedSeason == season ? Color.white : Color.clear, in: Capsule())
+                            .glassEffect(.regular.interactive(), in: .capsule)
+                            .accessibilityAddTraits(selectedSeason == season ? .isSelected : [])
+                        }
                     }
-                    .pickerStyle(.menu)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 2)
                 }
+                .scrollIndicators(.hidden)
             }
-            .padding(.horizontal, 22)
 
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 14) {

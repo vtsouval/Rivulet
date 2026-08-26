@@ -14,6 +14,19 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>com.vtsouval.jellyplugs.rivulet.quickconnect</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>rivulet</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
@@ -31,6 +44,8 @@
 	</dict>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Use Face ID to unlock your Jellyfin profile and approve passkey sign-in.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Scan a Jellyfin Quick Connect QR code to securely authorize another device.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Rivulet connects to playlist and guide servers on your local network.</string>
 	<key>UIBackgroundModes</key>

@@ -63,6 +63,23 @@ nonisolated struct JellyfinAuthClient: Sendable {
         return try makeSession(from: result)
     }
 
+    /// Authorizes a pending Quick Connect request for the authenticated user.
+    /// Jellyfin returns a bare boolean and requires the existing user's token.
+    func authorizeQuickConnect(
+        code: String,
+        userID: String,
+        accessToken: String
+    ) async throws -> Bool {
+        try await transport.post(
+            "/QuickConnect/Authorize",
+            queryItems: [
+                URLQueryItem(name: "code", value: try JellyfinQuickConnectPayload.code(from: code)),
+                URLQueryItem(name: "userId", value: userID)
+            ],
+            token: accessToken
+        )
+    }
+
     private func makeSession(from result: JellyfinAuthenticationResult) throws -> JellyfinAuthenticatedSession {
         guard !result.accessToken.isEmpty, !result.user.id.isEmpty else {
             throw JellyfinAPIError.invalidAuthenticationResponse

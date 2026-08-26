@@ -140,6 +140,14 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.3.0 (79)", [
+            "Connect Apple TV or another device by scanning its secure Quick Connect QR code with a signed-in iPhone or iPad",
+            "Quick Connect QR codes contain no password, access token, or connection secret",
+            "Movies and TV Shows now use fast, horizontally scrollable genre controls",
+            "Discover progressively loads dedicated movie and show genre shelves without delaying the first screen",
+            "TV seasons now use the same native Liquid Glass selector as catalog filters",
+            "Improved cross-platform Jellyfin navigation, caching, and account controls",
+        ]),
         ("1.0.5 (80)", [
             "Updated AetherEngine to 6.32.0",
             "Playback errors now say what went wrong instead of one generic message",

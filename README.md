@@ -61,7 +61,8 @@ Playback runs on [AetherEngine](https://github.com/superuser404notfound/AetherEn
 ### Jellyfin
 
 - Native Jellyfin sign-in by password or Quick Connect, with tokens stored in the Keychain.
-- Native Home and Discover shelves plus paged Movies and TV Shows catalogs with genre, favorites, watchlist, unwatched, and sort controls.
+- Secure two-device pairing: Apple TV and new devices display a non-secret QR/code; a signed-in iPhone or iPad scans and authorizes it without exposing a password or access token.
+- Native Home and Discover shelves plus lazily loaded genre collections and paged Movies and TV Shows catalogs with genre, favorites, watchlist, unwatched, and sort controls.
 - Failure-isolated Continue Watching, Next Up, Recently Added, Favorites, and Top Rated shelves, backed by a non-secret on-device metadata snapshot for immediate relaunches.
 - Jellyfin libraries, search, artwork, seasons, episodes, people, and user state across iPhone, iPad, Apple TV, and Mac Catalyst.
 - Direct Jellyfin playback negotiation with resume position, audio/subtitle selection, progress reporting, and live-session cleanup.
@@ -141,7 +142,11 @@ limitations, and passkey setup, see [Apple builds and installation](APPLE_BUILDS
 
 On iPhone or iPad, a clean installation opens the native Jellyfin sign-in
 surface. Enter the externally reachable server URL, including `https://`, and
-use a username/password or Quick Connect. The touch-first Home, Libraries,
+use a username/password or Quick Connect. To connect an Apple TV or another new
+device, display its QR code, then use **Settings > Account security > Connect
+another device** on an already signed-in iPhone or iPad. The QR contains only
+the normalized server address and short-lived display code; never a password,
+Quick Connect secret, or Jellyfin token. The touch-first Home, Libraries,
 Search, Live TV, details, season/episode, and AetherPlayer surfaces become
 available immediately after authentication. Existing Plex installations remain
 on Plex until Jellyfin is selected in **Settings > Media provider**.

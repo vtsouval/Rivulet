@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
+import CoreImage
+import CoreImage.CIFilterBuiltins
 import UIKit
 
 /// Native tvOS connection flow for Jellyfin. Passwords live only in the text
@@ -20,7 +22,9 @@ final class JellyfinAuthViewController: UIViewController {
     private let closeButton = UIButton(type: .system)
     private let statusLabel = UILabel()
     private let quickCodeLabel = UILabel()
+    private let quickQRCodeView = UIImageView()
     private let activity = UIActivityIndicatorView(style: .large)
+    private let buttonRow = UIStackView()
 
     private var operation: Task<Void, Never>?
 
@@ -107,17 +111,26 @@ final class JellyfinAuthViewController: UIViewController {
         quickCodeLabel.textAlignment = .center
         quickCodeLabel.isHidden = true
 
+        quickQRCodeView.backgroundColor = .white
+        quickQRCodeView.contentMode = .scaleAspectFit
+        quickQRCodeView.layer.cornerRadius = 24
+        quickQRCodeView.layer.cornerCurve = .continuous
+        quickQRCodeView.clipsToBounds = true
+        quickQRCodeView.isHidden = true
+        quickQRCodeView.accessibilityLabel = "Quick Connect QR code"
+
         activity.hidesWhenStopped = true
         activity.color = .white
 
-        let buttonRow = UIStackView(arrangedSubviews: [quickConnectButton, connectButton])
+        buttonRow.addArrangedSubview(quickConnectButton)
+        buttonRow.addArrangedSubview(connectButton)
         buttonRow.axis = .horizontal
         buttonRow.spacing = 22
         buttonRow.distribution = .fillEqually
 
         let stack = UIStackView(arrangedSubviews: [
             title, subtitle, serverField, usernameField, passwordField,
-            buttonRow, quickCodeLabel, activity, statusLabel, closeButton
+            buttonRow, quickQRCodeView, quickCodeLabel, activity, statusLabel, closeButton
         ])
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.axis = .vertical
@@ -141,6 +154,8 @@ final class JellyfinAuthViewController: UIViewController {
             usernameField.heightAnchor.constraint(equalToConstant: 76),
             passwordField.heightAnchor.constraint(equalToConstant: 76),
             buttonRow.heightAnchor.constraint(equalToConstant: 82),
+            quickQRCodeView.widthAnchor.constraint(equalToConstant: 230),
+            quickQRCodeView.heightAnchor.constraint(equalToConstant: 230),
             closeButton.heightAnchor.constraint(equalToConstant: 68)
         ])
     }
@@ -258,9 +273,15 @@ final class JellyfinAuthViewController: UIViewController {
                     throw JellyfinAPIError.forbidden(message: "Quick Connect is disabled on this server.")
                 }
                 let started = try await client.startQuickConnect()
+                let payload = try JellyfinQuickConnectPayload(
+                    serverURL: transport.baseURL,
+                    code: started.code
+                )
+                self.setQuickConnectPresentation(true)
+                self.quickQRCodeView.image = Self.quickConnectQRImage(for: payload.url)
                 self.quickCodeLabel.text = started.code
                 self.quickCodeLabel.isHidden = false
-                self.showStatus("Approve this code from an authenticated Jellyfin device.", isError: false)
+                self.showStatus("Scan with Rivulet on iPhone or iPad.", isError: false)
 
                 let deadline = Date().addingTimeInterval(300)
                 var state = started
@@ -286,7 +307,7 @@ final class JellyfinAuthViewController: UIViewController {
                 self.setBusy(false)
             } catch {
                 self.setBusy(false)
-                self.quickCodeLabel.isHidden = true
+                self.setQuickConnectPresentation(false)
                 self.showStatus(Self.userFacingMessage(for: error), isError: true)
             }
         }
@@ -303,6 +324,7 @@ final class JellyfinAuthViewController: UIViewController {
         passwordField.text = nil
         quickCodeLabel.text = nil
         quickCodeLabel.isHidden = true
+        setQuickConnectPresentation(false)
     }
 
     private func setBusy(_ busy: Bool, message: String? = nil) {
@@ -323,13 +345,38 @@ final class JellyfinAuthViewController: UIViewController {
 
     private func finishAuthentication() {
         setBusy(false)
-        quickCodeLabel.isHidden = true
+        setQuickConnectPresentation(false)
         showStatus("Connected", isError: false)
         UIView.animate(withDuration: 0.25, animations: {
             self.view.alpha = 0
         }, completion: { _ in
             self.dismiss(animated: false)
         })
+    }
+
+    private func setQuickConnectPresentation(_ active: Bool) {
+        serverField.isHidden = active
+        usernameField.isHidden = active
+        passwordField.isHidden = active
+        buttonRow.isHidden = active
+        quickQRCodeView.isHidden = !active
+        quickCodeLabel.isHidden = !active
+        if !active {
+            quickQRCodeView.image = nil
+            quickCodeLabel.text = nil
+        }
+    }
+
+    private static func quickConnectQRImage(for url: URL) -> UIImage? {
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(url.absoluteString.utf8)
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage?.transformed(
+            by: CGAffineTransform(scaleX: 12, y: 12)
+        ) else { return nil }
+        let context = CIContext(options: [.useSoftwareRenderer: false])
+        guard let image = context.createCGImage(output, from: output.extent) else { return nil }
+        return UIImage(cgImage: image)
     }
 
     /// Deliberately maps errors to a fixed vocabulary. Server response bodies

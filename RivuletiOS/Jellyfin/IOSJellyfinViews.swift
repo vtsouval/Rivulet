@@ -61,35 +61,63 @@ struct IOSJellyfinSignInView: View {
                     Text("Connect Jellyfin")
                         .font(.largeTitle.bold())
 
-                    VStack(spacing: 14) {
-                        TextField("Server address", text: $server)
-                            .textContentType(.URL)
-                            .keyboardType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .submitLabel(.next)
-                        TextField("Username", text: $username)
-                            .textContentType(.username)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .submitLabel(.next)
-                        SecureField("Password", text: $password)
-                            .textContentType(.password)
-                            .submitLabel(.go)
-                            .onSubmit(connect)
-                    }
-                    .textFieldStyle(.plain)
-                    .padding(20)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    .overlay { RoundedRectangle(cornerRadius: 24).stroke(.white.opacity(0.14)) }
-
                     if let code = jellyfin.quickConnectCode {
-                        VStack(spacing: 8) {
-                            Text(code).font(.system(.largeTitle, design: .monospaced, weight: .bold))
-                            Text("Approve this code in Jellyfin")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
+                        IOSJellyfinQuickConnectCodeView(
+                            code: code,
+                            payloadURL: jellyfin.quickConnectPayloadURL
+                        )
                         .transition(.scale.combined(with: .opacity))
+
+                        Button("Cancel Quick Connect", systemImage: "xmark") {
+                            operation?.cancel()
+                        }
+                        .buttonStyle(.bordered)
+                    } else {
+                        VStack(spacing: 14) {
+                            TextField("Server address", text: $server)
+                                .textContentType(.URL)
+                                .keyboardType(.URL)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .submitLabel(.next)
+                            TextField("Username", text: $username)
+                                .textContentType(.username)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .submitLabel(.next)
+                            SecureField("Password", text: $password)
+                                .textContentType(.password)
+                                .submitLabel(.go)
+                                .onSubmit(connect)
+                        }
+                        .textFieldStyle(.plain)
+                        .padding(20)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                        .overlay { RoundedRectangle(cornerRadius: 24).stroke(.white.opacity(0.14)) }
+
+                        Button(action: connect) {
+                            Label(isBusy ? "Connecting…" : "Connect", systemImage: "arrow.right")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .disabled(isBusy || server.isEmpty || username.isEmpty)
+
+                        Button("Quick Connect", systemImage: "qrcode", action: quickConnect)
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+                            .disabled(isBusy || server.isEmpty)
+
+                        if IOSJellyfinPasskeyCoordinator.isAvailableInThisBuild {
+                            Button("Sign in with Passkey", systemImage: "person.badge.key.fill", action: passkey)
+                                .buttonStyle(.bordered)
+                                .controlSize(.large)
+                                .disabled(isBusy || server.isEmpty)
+                        }
+
+                        IOSBackendPicker()
+                            .pickerStyle(.segmented)
+                            .padding(.top, 8)
                     }
 
                     if let error {
@@ -98,30 +126,6 @@ struct IOSJellyfinSignInView: View {
                             .foregroundStyle(.yellow)
                             .multilineTextAlignment(.center)
                     }
-
-                    Button(action: connect) {
-                        Label(isBusy ? "Connecting…" : "Connect", systemImage: "arrow.right")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(isBusy || server.isEmpty || username.isEmpty)
-
-                    Button("Quick Connect", systemImage: "qrcode", action: quickConnect)
-                        .buttonStyle(.bordered)
-                        .controlSize(.large)
-                        .disabled(isBusy || server.isEmpty)
-
-                    if IOSJellyfinPasskeyCoordinator.isAvailableInThisBuild {
-                        Button("Sign in with Passkey", systemImage: "person.badge.key.fill", action: passkey)
-                            .buttonStyle(.bordered)
-                            .controlSize(.large)
-                            .disabled(isBusy || server.isEmpty)
-                    }
-
-                    IOSBackendPicker()
-                        .pickerStyle(.segmented)
-                        .padding(.top, 8)
                 }
                 .frame(maxWidth: 480)
                 .padding(.horizontal, 24)
@@ -235,6 +239,9 @@ struct IOSJellyfinHomeView: View {
                             ForEach(visibleHubs) { hub in
                                 IOSJellyfinShelf(title: hub.title, items: hub.items)
                             }
+                            if mode == .discover {
+                                IOSJellyfinDiscoveryGenreShelves()
+                            }
                         }
                         .padding(.bottom, 30)
                     }
@@ -265,6 +272,93 @@ struct IOSJellyfinHomeView: View {
     private var stateMessage: String {
         if case .failed(let message) = jellyfin.state { return message }
         return "Pull to refresh your libraries."
+    }
+}
+
+private struct IOSJellyfinDiscoveryGenreShelves: View {
+    private struct Section: Identifiable {
+        let kind: JellyfinCatalogKind
+        let genre: JellyfinCatalogGenre
+        var id: String { "\(kind.rawValue):\(genre.id)" }
+        var title: String { "\(genre.name) \(kind == .movies ? "Movies" : "Shows")" }
+    }
+
+    @EnvironmentObject private var jellyfin: IOSJellyfinSession
+    @State private var sections: [Section] = []
+
+    var body: some View {
+        ForEach(sections) { section in
+            IOSJellyfinDiscoveryGenreShelf(
+                title: section.title,
+                request: JellyfinCatalogQuery(
+                    kind: section.kind,
+                    genre: section.genre.name,
+                    sort: .ratingDesc
+                )
+            )
+        }
+        .task {
+            guard sections.isEmpty else { return }
+            async let movieRequest = jellyfin.genres(for: .movies)
+            async let showRequest = jellyfin.genres(for: .shows)
+            let movieGenres = (try? await movieRequest) ?? []
+            let showGenres = (try? await showRequest) ?? []
+            let preferred = [
+                "Action", "Drama", "Comedy", "Crime", "Documentary",
+                "Family", "Animation", "Science Fiction", "Adventure"
+            ]
+            let movies = prioritized(movieGenres, names: preferred).prefix(3).map {
+                Section(kind: .movies, genre: $0)
+            }
+            let shows = prioritized(showGenres, names: preferred).prefix(3).map {
+                Section(kind: .shows, genre: $0)
+            }
+            sections = interleaved(Array(movies), Array(shows))
+        }
+    }
+
+    private func prioritized(
+        _ genres: [JellyfinCatalogGenre],
+        names: [String]
+    ) -> [JellyfinCatalogGenre] {
+        let ordered = names.compactMap { preferred in
+            genres.first { $0.name.localizedCaseInsensitiveCompare(preferred) == .orderedSame }
+        }
+        let selected = Set(ordered.map(\.id))
+        return ordered + genres.filter { !selected.contains($0.id) }
+    }
+
+    private func interleaved(_ first: [Section], _ second: [Section]) -> [Section] {
+        var output: [Section] = []
+        for index in 0..<max(first.count, second.count) {
+            if first.indices.contains(index) { output.append(first[index]) }
+            if second.indices.contains(index) { output.append(second[index]) }
+        }
+        return output
+    }
+}
+
+private struct IOSJellyfinDiscoveryGenreShelf: View {
+    let title: String
+    let request: JellyfinCatalogQuery
+
+    @EnvironmentObject private var jellyfin: IOSJellyfinSession
+    @State private var items: [MediaItem] = []
+
+    var body: some View {
+        Group {
+            if !items.isEmpty {
+                IOSJellyfinShelf(title: title, items: items)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+        }
+        .task(id: request) {
+            guard items.isEmpty else { return }
+            if let page = try? await jellyfin.catalog(request, pageSize: 24),
+               !Task.isCancelled {
+                withAnimation(.easeOut(duration: 0.24)) { items = page.items }
+            }
+        }
     }
 }
 
@@ -385,6 +479,11 @@ struct IOSJellyfinSettingsView: View {
                                 : "Face ID & App Lock",
                             systemImage: "faceid"
                         )
+                    }
+                    NavigationLink {
+                        IOSJellyfinQuickConnectAuthorizerView()
+                    } label: {
+                        Label("Connect another device", systemImage: "qrcode.viewfinder")
                     }
                 }
                 Section("Preferences") {

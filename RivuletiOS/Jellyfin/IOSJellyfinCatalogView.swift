@@ -94,14 +94,19 @@ struct IOSJellyfinCatalogView: View {
             }
             .scrollIndicators(.hidden)
 
-            HStack(spacing: 10) {
-                Menu {
-                    Button("All Genres") { genre = nil }
-                    ForEach(genres) { value in Button(value.name) { genre = value } }
-                } label: {
-                    Label(genre?.name ?? "All Genres", systemImage: "slider.horizontal.3")
-                        .lineLimit(1)
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    genreButton(title: "All", value: nil)
+                    ForEach(genres) { value in
+                        genreButton(title: value.name, value: value)
+                    }
                 }
+                .padding(.horizontal)
+                .padding(.vertical, 2)
+            }
+            .scrollIndicators(.hidden)
+
+            HStack(spacing: 10) {
                 Menu {
                     Button("Recently Added") { sort = .addedAtDesc }
                     Button("Title") { sort = .titleAsc }
@@ -116,6 +121,24 @@ struct IOSJellyfinCatalogView: View {
             .font(.subheadline.weight(.semibold))
             .padding(.horizontal)
         }
+    }
+
+    private func genreButton(title: String, value: JellyfinCatalogGenre?) -> some View {
+        let selected = genre?.id == value?.id
+        return Button {
+            withAnimation(.snappy(duration: 0.26)) { genre = value }
+        } label: {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(selected ? Color.black : Color.primary)
+        .background(selected ? Color.white : Color.clear, in: Capsule())
+        .glassEffect(.regular.interactive(), in: .capsule)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private var skeleton: some View {

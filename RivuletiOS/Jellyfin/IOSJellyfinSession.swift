@@ -28,6 +28,7 @@ final class IOSJellyfinSession: ObservableObject {
     @Published private(set) var homeHubs: [MediaHub] = []
     @Published private(set) var isRefreshing = false
     @Published private(set) var quickConnectCode: String?
+    @Published private(set) var quickConnectPayloadURL: URL?
 
     private(set) var provider: JellyfinProvider?
     private(set) var liveTVProvider: JellyfinLiveTVProvider?
@@ -110,6 +111,7 @@ final class IOSJellyfinSession: ObservableObject {
     func quickConnect(server: String) async throws {
         state = .connecting
         quickConnectCode = nil
+        quickConnectPayloadURL = nil
         do {
             let transport = try JellyfinTransport(
                 serverURL: server,
@@ -121,6 +123,10 @@ final class IOSJellyfinSession: ObservableObject {
             }
             let started = try await auth.startQuickConnect()
             quickConnectCode = started.code
+            quickConnectPayloadURL = try JellyfinQuickConnectPayload(
+                serverURL: transport.baseURL,
+                code: started.code
+            ).url
             let deadline = Date().addingTimeInterval(300)
             var status = started
             while !status.authenticated {
@@ -135,18 +141,56 @@ final class IOSJellyfinSession: ObservableObject {
             try await JellyfinSessionStore.shared.persist(session)
             UserDefaults.standard.set(session.serverURL.absoluteString, forKey: "jellyfin.lastServerURL")
             quickConnectCode = nil
+            quickConnectPayloadURL = nil
             try attach(session)
             refreshAfterAuthentication()
+        } catch is CancellationError {
+            quickConnectCode = nil
+            quickConnectPayloadURL = nil
+            state = .signedOut
+            throw CancellationError()
         } catch {
             quickConnectCode = nil
+            quickConnectPayloadURL = nil
             state = .failed(Self.message(for: error))
             throw error
         }
     }
 
+    /// Lets an already signed-in iPhone authorize a television or another
+    /// client. The QR server must exactly match the active authenticated
+    /// server, preventing a scan from sending this token to another origin.
+    func authorizeQuickConnect(payload: JellyfinQuickConnectPayload) async throws {
+        guard let provider else { throw MediaProviderError.unauthorized }
+        guard payload.belongs(to: provider.session) else {
+            throw JellyfinAPIError.forbidden(
+                message: "This Quick Connect request belongs to another Jellyfin server."
+            )
+        }
+        let authorized = try await JellyfinAuthClient(transport: provider.transport).authorizeQuickConnect(
+            code: payload.code,
+            userID: provider.session.user.id,
+            accessToken: provider.session.accessToken
+        )
+        guard authorized else {
+            throw JellyfinAPIError.unauthorized(message: "The Quick Connect code expired or was not accepted.")
+        }
+    }
+
+    func authorizeQuickConnect(code: String) async throws {
+        guard let session = provider?.session else { throw MediaProviderError.unauthorized }
+        let payload = try JellyfinQuickConnectPayload(serverURL: session.serverURL, code: code)
+        try await authorizeQuickConnect(payload: payload)
+    }
+
+    func authorizeQuickConnect(url: URL) async throws {
+        try await authorizeQuickConnect(payload: JellyfinQuickConnectPayload(url: url))
+    }
+
     func passkeySignIn(server: String) async throws {
         state = .connecting
         quickConnectCode = nil
+        quickConnectPayloadURL = nil
         do {
             let transport = try JellyfinTransport(
                 serverURL: server,
@@ -546,6 +590,7 @@ final class IOSJellyfinSession: ObservableObject {
         catalogTasks.values.forEach { $0.cancel() }
         catalogTasks = [:]
         quickConnectCode = nil
+        quickConnectPayloadURL = nil
         self.state = state
     }
 

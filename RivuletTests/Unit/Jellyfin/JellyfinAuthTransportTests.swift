@@ -199,6 +199,87 @@ final class JellyfinAuthTransportTests: XCTestCase {
         XCTAssertTrue(isEnabled)
     }
 
+    func testQuickConnectPayloadRoundTripsWithoutSecretsOrTokens() throws {
+        let payload = try JellyfinQuickConnectPayload(
+            serverURL: URL(string: "https://media.example.com/jellyfin/web/#/home")!,
+            code: "12-34 56"
+        )
+        let decoded = try JellyfinQuickConnectPayload(url: payload.url)
+
+        XCTAssertEqual(decoded.serverURL.absoluteString, "https://media.example.com/jellyfin")
+        XCTAssertEqual(decoded.code, "123456")
+        XCTAssertFalse(payload.url.absoluteString.localizedCaseInsensitiveContains("secret"))
+        XCTAssertFalse(payload.url.absoluteString.localizedCaseInsensitiveContains("token"))
+    }
+
+    func testQuickConnectPayloadRejectsForeignSchemesAndInvalidCodes() {
+        XCTAssertThrowsError(try JellyfinQuickConnectPayload(
+            url: URL(string: "https://attacker.example/quick-connect?server=https://media.example.com&code=123456")!
+        ))
+        XCTAssertThrowsError(try JellyfinQuickConnectPayload(
+            serverURL: URL(string: "https://media.example.com")!,
+            code: "bad/code"
+        ))
+    }
+
+    func testQuickConnectPayloadOnlyBelongsToExactAuthenticatedServer() throws {
+        let payload = try JellyfinQuickConnectPayload(
+            serverURL: URL(string: "https://media.example.com/jellyfin")!,
+            code: "123456"
+        )
+        let matching = JellyfinAuthenticatedSession(
+            serverURL: URL(string: "https://media.example.com/jellyfin/web")!,
+            accessToken: "token",
+            user: JellyfinUser(
+                id: "user-1",
+                name: "Vasilis",
+                serverID: "server-1",
+                primaryImageTag: nil,
+                hasPassword: true
+            ),
+            serverID: "server-1",
+            clientIdentity: identity,
+            authenticatedAt: Date(timeIntervalSince1970: 1)
+        )
+        let foreign = JellyfinAuthenticatedSession(
+            serverURL: URL(string: "https://other.example.com/jellyfin")!,
+            accessToken: "token",
+            user: JellyfinUser(
+                id: "user-1",
+                name: "Vasilis",
+                serverID: "server-2",
+                primaryImageTag: nil,
+                hasPassword: true
+            ),
+            serverID: "server-2",
+            clientIdentity: identity,
+            authenticatedAt: Date(timeIntervalSince1970: 1)
+        )
+
+        XCTAssertTrue(payload.belongs(to: matching))
+        XCTAssertFalse(payload.belongs(to: foreign))
+    }
+
+    func testAuthorizeQuickConnectUsesAuthenticatedUserAndNormalizedCode() async throws {
+        JellyfinTestURLProtocol.enqueueJSONValue(path: "/QuickConnect/Authorize", value: true)
+
+        let client = try makeClient()
+        let authorized = try await client.authorizeQuickConnect(
+            code: "12 34-56",
+            userID: "user-1",
+            accessToken: "access-token"
+        )
+
+        XCTAssertTrue(authorized)
+        let request = try XCTUnwrap(JellyfinTestURLProtocol.requests().first)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertTrue(request.value(forHTTPHeaderField: "Authorization")?.contains("Token=\"access-token\"") == true)
+        XCTAssertEqual(
+            URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems,
+            [URLQueryItem(name: "code", value: "123456"), URLQueryItem(name: "userId", value: "user-1")]
+        )
+    }
+
     func testGenericMutationSupportsQueryJSONBodyAndEmpty204Response() async throws {
         JellyfinTestURLProtocol.enqueueData(path: "/Users/user-1/Items/item-1", statusCode: 204, data: Data())
 
