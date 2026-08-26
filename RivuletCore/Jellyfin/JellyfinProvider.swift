@@ -455,6 +455,18 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         try await setWatchlist(ref, enabled: false)
     }
 
+    /// Jellyfin favorite state is independent from the Liquid Media watchlist.
+    /// Keep the two actions separate so an iOS heart never mutates watchlist.
+    func setFavorite(_ ref: MediaItemRef, enabled: Bool) async throws {
+        try await jellyfinCall {
+            try await transport.requestEmpty(
+                "/Users/\(session.user.id)/FavoriteItems/\(ref.itemID)",
+                method: enabled ? .post : .delete,
+                token: session.accessToken
+            )
+        }
+    }
+
     // MARK: - Helpers
 
     private var commonQueryItems: [URLQueryItem] {

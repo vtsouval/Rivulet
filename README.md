@@ -138,6 +138,15 @@ xcodebuild -scheme "Rivulet iOS" -destination 'generic/platform=iOS' build
 
 ### Connecting Jellyfin
 
+On iPhone or iPad, a clean installation opens the native Jellyfin sign-in
+surface. Enter the externally reachable server URL, including `https://`, and
+use a username/password or Quick Connect. The touch-first Home, Libraries,
+Search, Live TV, details, season/episode, and AetherPlayer surfaces become
+available immediately after authentication. Existing Plex installations remain
+on Plex until Jellyfin is selected in **Settings > Media provider**.
+
+On Apple TV:
+
 1. Open **Settings > Servers > Jellyfin Server**.
 2. Enter the externally reachable Jellyfin server URL, including `https://`, then sign in with a username and password or use Quick Connect.
 3. If Plex is also configured, use **Settings > Servers > Active provider** to select Jellyfin.
@@ -149,10 +158,10 @@ Passwords are never persisted. The app stores only Jellyfin's revocable access t
 
 ```
 Rivulet/           The tvOS app — all primary surfaces are UIKit
-RivuletiOS/        The iOS/iPadOS app (early) — SwiftUI, touch-first
-RivuletCore/       Code compiled into both apps: the Plex client and models,
-                   auth, IPTV parsers, TMDB, watch-progress policy, security,
-                   diagnostics
+RivuletiOS/        The native iOS/iPadOS app — SwiftUI, touch-first Plex and Jellyfin UI
+RivuletCore/       Code compiled into both apps: the Plex/Jellyfin providers and models,
+                   auth, playback negotiation, IPTV parsers, TMDB,
+                   watch-progress policy, security, diagnostics
 TopShelfExtension/ Apple TV home-screen Top Shelf
 RivuletTests/      Unit tests (run with the Rivulet scheme)
 ```

@@ -4,7 +4,7 @@
 import SwiftUI
 
 /// Touch-first navigation using Apple's native five-item tab bar.
-struct IOSRootView: View {
+struct IOSPlexRootView: View {
     @EnvironmentObject private var plex: IOSPlexSession
     @EnvironmentObject private var navigation: IOSNavigationSettings
     @State private var selectedID = "home"
@@ -74,7 +74,7 @@ private struct IOSPlexRecordingsView: View {
 }
 
 #Preview {
-    IOSRootView()
+    IOSPlexRootView()
         .environmentObject(IOSPlexSession())
         .environmentObject(IOSNavigationSettings())
 }

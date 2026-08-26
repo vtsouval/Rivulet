@@ -7,6 +7,7 @@ import UIKit
 @main
 struct RivuletiOSApp: App {
     @StateObject private var plex = IOSPlexSession()
+    @StateObject private var jellyfin = IOSJellyfinSession()
     @StateObject private var navigation = IOSNavigationSettings()
 
     init() {
@@ -36,6 +37,7 @@ struct RivuletiOSApp: App {
         WindowGroup {
             IOSRootView()
                 .environmentObject(plex)
+                .environmentObject(jellyfin)
                 .environmentObject(navigation)
         }
     }

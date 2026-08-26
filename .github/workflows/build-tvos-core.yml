@@ -15,7 +15,7 @@ on:
       - 'Rivulet.xcodeproj/**'
       - '.github/workflows/build-tvos-core.yml'
   push:
-    branches: [main]
+    branches: [main, feature/jellyfin-provider]
     paths:
       - 'RivuletCore/**'
       - 'Rivulet.xcodeproj/**'

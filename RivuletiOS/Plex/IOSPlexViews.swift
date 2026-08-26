@@ -333,6 +333,10 @@ struct IOSPlexSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("Media provider") {
+                    IOSBackendPicker()
+                }
+
                 Section("Plex") {
                     LabeledContent("Status", value: plex.isConfigured ? "Connected" : "Not connected")
                     if let server = plex.selectedServerName {

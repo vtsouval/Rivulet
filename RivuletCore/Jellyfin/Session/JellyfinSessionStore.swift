@@ -153,8 +153,10 @@ final class JellyfinSessionStore {
 
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
             ?? "development"
+        let deviceFamilies = Bundle.main.object(forInfoDictionaryKey: "UIDeviceFamily") as? [Int]
+        let device = deviceFamilies?.contains(3) == true ? "Apple TV" : "iPhone or iPad"
         return JellyfinClientIdentity(
-            device: "Apple TV",
+            device: device,
             deviceID: deviceID,
             version: version
         )
