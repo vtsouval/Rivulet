@@ -1072,7 +1072,45 @@ final class PreviewCarouselViewController: UIViewController {
 
     private func playMediaItem(_ item: MediaItem) {
         let offsetSec = item.userState.viewOffset
+        if item.ref.providerID.hasPrefix("jellyfin:") {
+            presentProviderPlayer(item: item, resumeOffset: offsetSec > 0 ? offsetSec : nil)
+            return
+        }
         presentPlayer(ratingKey: item.ref.itemID, resumeOffset: offsetSec > 0 ? offsetSec : nil)
+    }
+
+    private func presentProviderPlayer(item: MediaItem, resumeOffset: Double?) {
+        Task { [weak self] in
+            guard let self,
+                  let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else {
+                previewCarouselLog.error("[PCV] provider play handoff: provider unavailable")
+                return
+            }
+            do {
+                let detail = try await provider.fullDetail(for: item.ref)
+                let preferredSource = detail.mediaSources.first?.id
+                let stream = try await provider.resolveStream(for: item.ref, sourceID: preferredSource)
+                guard stream.source.streamURL != nil else {
+                    throw MediaProviderError.notPlayable
+                }
+                let context = MediaProviderPlaybackContext(
+                    detail: detail,
+                    streamInfo: stream,
+                    provider: provider
+                )
+                await MainActor.run {
+                    let viewModel = UniversalPlayerViewModel(
+                        providerContext: context,
+                        startOffset: resumeOffset
+                    )
+                    PlayerPresenter.present(viewModel: viewModel, from: self)
+                }
+            } catch {
+                previewCarouselLog.error(
+                    "[PCV] provider play handoff failed: \(String(describing: error), privacy: .public)"
+                )
+            }
+        }
     }
 
     /// Resolve a Plex ratingKey → metadata → present the player. Used for the

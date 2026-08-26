@@ -26,7 +26,7 @@ struct StreamSlotView: View {
             // Background
             Color.black
 
-            if let _ = streamURL {
+            if slot.resolvedStream != nil || streamURL != nil {
                 playerView
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()

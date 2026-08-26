@@ -134,6 +134,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// `PlexNetworkManager.buildThumbnailURL` applies (the TV renders it at
     /// native size, full-bleed).
     var ambientBackdropURL: URL? {
+        if let providerPlaybackContext {
+            return providerPlaybackContext.detail.item.artwork.backdrop
+        }
         guard let art = metadata.art,
               var components = URLComponents(string: "\(serverURL)\(art)") else { return nil }
         components.queryItems = (components.queryItems ?? []) + [
@@ -290,7 +293,12 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Persistence key for this item's sticky subtitle adjustments (delay and
     /// height). Shared by both, so a title carries one identity.
-    var subtitleMediaKey: String { "plex:\(metadata.ratingKey ?? "unknown")" }
+    var subtitleMediaKey: String {
+        if let providerPlaybackContext {
+            return "\(providerPlaybackContext.itemRef.providerID):\(providerPlaybackContext.itemRef.itemID)"
+        }
+        return "plex:\(metadata.ratingKey ?? "unknown")"
+    }
 
     /// This item's height adjustment in stepper units. Published so both
     /// overlays re-render on a step, and reloaded per item like the delay.
@@ -437,6 +445,13 @@ final class UniversalPlayerViewModel: ObservableObject {
     let serverURL: String
     let authToken: String
     private(set) var startOffset: TimeInterval?
+    private let providerPlaybackContext: MediaProviderPlaybackContext?
+    /// True when playback was resolved by the provider abstraction rather
+    /// than Plex. Presentation uses this to avoid applying Plex-only
+    /// connection policy to valid Jellyfin sessions.
+    var usesProviderPlayback: Bool { providerPlaybackContext != nil }
+    private var lastProviderProgressReport: TimeInterval = -.infinity
+    private var didStopProviderReporter = false
 
     // MARK: - Loading Screen Images (passed from detail view for instant display)
 
@@ -518,6 +533,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         self.loadingThumbImage = loadingThumbImage
         self.initialAudioTrackId = initialAudioTrackId
         self.initialSubtitleSelection = initialSubtitleSelection
+        self.providerPlaybackContext = nil
 
         let isAirPlayRoute = Self.isAirPlayOutput()
         let hasDolbyVision = metadata.hasDolbyVision
@@ -535,6 +551,82 @@ final class UniversalPlayerViewModel: ObservableObject {
         setupPlayer()
 
         addPlaybackSelectionBreadcrumb(reason: "init")
+    }
+
+    /// Provider-neutral entry point used by Jellyfin and future backends.
+    /// `PlexMetadata` remains an internal presentation adapter until the
+    /// player chrome is fully migrated to `MediaItemDetail`.
+    init(
+        providerContext: MediaProviderPlaybackContext,
+        startOffset: TimeInterval? = nil,
+        loadingArtImage: UIImage? = nil,
+        loadingThumbImage: UIImage? = nil
+    ) {
+        self.metadata = Self.presentationMetadata(from: providerContext.detail)
+        self.serverURL = providerContext.streamInfo.source.streamURL?
+            .deletingLastPathComponent().absoluteString ?? "https://localhost"
+        self.authToken = ""
+        self.startOffset = startOffset
+        self.shuffledQueue = []
+        self.loadingArtImage = loadingArtImage
+        self.loadingThumbImage = loadingThumbImage
+        self.initialAudioTrackId = providerContext.streamInfo.source.audioTracks
+            .first(where: \.isSelected)?.index
+        if let selected = providerContext.streamInfo.source.subtitleTracks.first(where: \.isSelected) {
+            self.initialSubtitleSelection = .track(id: selected.index)
+        } else {
+            self.initialSubtitleSelection = .auto
+        }
+        self.providerPlaybackContext = providerContext
+
+        setupPlayer()
+        addPlaybackSelectionBreadcrumb(reason: "provider_init")
+    }
+
+    private static func presentationMetadata(from detail: MediaItemDetail) -> PlexMetadata {
+        let item = detail.item
+        let type: String
+        switch item.kind {
+        case .movie: type = "movie"
+        case .show: type = "show"
+        case .season: type = "season"
+        case .episode: type = "episode"
+        default: type = "video"
+        }
+        return PlexMetadata(
+            ratingKey: item.ref.itemID,
+            type: type,
+            title: item.title,
+            contentRating: detail.contentRating ?? item.contentRating,
+            summary: item.overview,
+            tagline: detail.tagline,
+            year: item.year,
+            rating: detail.rating,
+            Genre: detail.genres.map { PlexTag(_id: nil, tag: $0) },
+            duration: item.runtime.map { Int($0 * 1_000) },
+            originallyAvailableAt: item.releaseDate,
+            parentRatingKey: item.parentRef?.itemID,
+            parentIndex: item.seasonNumber,
+            grandparentRatingKey: item.grandparentRef?.itemID,
+            index: item.episodeNumber,
+            viewCount: item.userState.isPlayed ? 1 : nil,
+            viewOffset: Int(item.userState.viewOffset * 1_000),
+            Role: detail.cast.map {
+                PlexRole(
+                    tag: $0.name,
+                    role: $0.role,
+                    thumb: $0.imageURL?.absoluteString,
+                    tagKey: nil,
+                    filter: nil
+                )
+            },
+            Director: detail.directors.map {
+                PlexCrewMember(tag: $0.name, thumb: $0.imageURL?.absoluteString)
+            },
+            Writer: detail.writers.map {
+                PlexCrewMember(tag: $0.name, thumb: $0.imageURL?.absoluteString)
+            }
+        )
     }
 
     private func setupPlayer() {
@@ -719,6 +811,22 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     private func prepareStreamURL() async {
+        if let context = providerPlaybackContext,
+           let resolvedURL = context.streamInfo.source.streamURL {
+            loadStoredSubtitleDelay()
+            streamURL = resolvedURL
+            streamHeaders = context.streamInfo.requestHeaders
+            let route = PlaybackRoute.aether(url: resolvedURL, headers: streamHeaders)
+            playbackPlan = PlaybackPlan(
+                policy: .directPlayFirst,
+                primary: route,
+                fallbacks: [],
+                reasoning: ["provider_resolved_stream"]
+            )
+            activeRoute = route
+            AppHangContext.setPlaybackRoute(route.description)
+            return
+        }
         let networkManager = PlexNetworkManager.shared
 
         guard metadata.ratingKey != nil else { return }
@@ -1069,6 +1177,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.currentTime = time.seconds
+                self.reportProviderProgressIfNeeded(position: time.seconds)
                 self.checkMarkers(at: time.seconds)
                 self.tickReplayWindow(at: time.seconds)
                 self.applyContentFilter(at: time.seconds)
@@ -1213,9 +1322,16 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     func startPlayback() async {
+        didStopProviderReporter = false
+        lastProviderProgressReport = -.infinity
         // Arm the local content filter for this item: reload settings, restore
         // any cached filter list, and (if a source URL is set) refresh it.
         contentFilter.beginItem(ratingKey: metadata.ratingKey)
+
+        if providerPlaybackContext != nil {
+            await startAVPlayerPlayback()
+            return
+        }
 
         // Fetch detailed metadata if markers or chapters are missing
         let hasMarkers = !(metadata.Marker ?? []).isEmpty
@@ -1288,6 +1404,10 @@ final class UniversalPlayerViewModel: ObservableObject {
                 let likelyKeepUp = player?.currentItem?.isPlaybackLikelyToKeepUp ?? false
                 print("[Player] play() — status=\(itemStatus) bufferEmpty=\(bufferEmpty) bufferFull=\(bufferFull) likelyKeepUp=\(likelyKeepUp)")
                 player?.play()
+            }
+
+            if let reporter = providerPlaybackContext?.progressReporter {
+                Task { await reporter.start() }
             }
 
             // Index for Siri Suggestions
@@ -1823,6 +1943,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // filter a stale playhead to act on.
                 guard !self.seekHold.isHolding else { return }
                 self.currentTime = time
+                self.reportProviderProgressIfNeeded(position: time)
                 // Drive marker handling for Aether (skip intro/credits/ad buttons,
                 // auto-skip, and the real Plex credits-marker post-video trigger).
                 // Mirrors the AVPlayer periodic observer (~line 979). Aether
@@ -2690,6 +2811,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         contentFilter.reset()
         releaseThumbnailCache()
 
+        if !didStopProviderReporter, let reporter = providerPlaybackContext?.progressReporter {
+            didStopProviderReporter = true
+            let position = currentTime
+            Task { await reporter.stopped(at: position) }
+        }
+
         // Clear the active playback route and content from the App Hang scope
         // (RIVULET-41) so a later hang off the player isn't tagged with a stale
         // route or content shape.
@@ -2742,8 +2869,16 @@ final class UniversalPlayerViewModel: ObservableObject {
         hidePausedPoster()
         if isPlaying {
             activePlayer_pause()
+            if let reporter = providerPlaybackContext?.progressReporter {
+                let position = currentTime
+                Task { await reporter.paused(at: position) }
+            }
         } else {
             activePlayer_play()
+            if let reporter = providerPlaybackContext?.progressReporter {
+                let position = currentTime
+                Task { await reporter.progress(position: position) }
+            }
         }
         showControlsTemporarily()
     }
@@ -2753,12 +2888,20 @@ final class UniversalPlayerViewModel: ObservableObject {
         pausedDueToAppInactive = false
         hidePausedPoster()
         activePlayer_play()
+        if let reporter = providerPlaybackContext?.progressReporter {
+            let position = currentTime
+            Task { await reporter.progress(position: position) }
+        }
         showControlsTemporarily()
     }
 
     /// Pause playback (used by remote commands)
     func pause() {
         activePlayer_pause()
+        if let reporter = providerPlaybackContext?.progressReporter {
+            let position = currentTime
+            Task { await reporter.paused(at: position) }
+        }
         showControlsTemporarily()
     }
 
@@ -4281,6 +4424,11 @@ final class UniversalPlayerViewModel: ObservableObject {
         await markCurrentAsWatched()
         guard generation == itemGeneration else { return }
 
+        if providerPlaybackContext != nil {
+            postVideoState = .hidden
+            return
+        }
+
         postVideoState = .loading
 
         // Per-user opt-out of the post-video "Up Next" chooser for TV
@@ -5008,6 +5156,12 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Mark current content as watched (for use before transitioning to next episode)
     private func markCurrentAsWatched() async {
+        if let context = providerPlaybackContext {
+            await context.progressReporter.stopped(at: currentTime)
+            try? await context.provider.markPlayed(context.itemRef)
+            didStopProviderReporter = true
+            return
+        }
         guard let ratingKey = metadata.ratingKey, !ratingKey.isEmpty else { return }
 
         // Report stopped state
@@ -5020,6 +5174,15 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // Mark as watched (episode reached post-video, so it's effectively complete)
         await PlexProgressReporter.shared.markAsWatched(ratingKey: ratingKey)
+    }
+
+    private func reportProviderProgressIfNeeded(position: TimeInterval) {
+        guard position.isFinite,
+              position >= 0,
+              position - lastProviderProgressReport >= 10,
+              let reporter = providerPlaybackContext?.progressReporter else { return }
+        lastProviderProgressReport = position
+        Task { await reporter.progress(position: position) }
     }
 
     // MARK: - Cleanup

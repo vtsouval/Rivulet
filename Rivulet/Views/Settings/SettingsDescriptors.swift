@@ -45,7 +45,7 @@ enum SettingsDescriptorStore {
         ),
         "cat_servers": SettingDescriptor(
             icon: "server.rack",
-            description: "Manage your Plex server connection and user profiles."
+            description: "Manage your Plex and Jellyfin server connections and user profiles."
         ),
         "cat_about": SettingDescriptor(
             icon: "info.circle.fill",
@@ -192,6 +192,30 @@ enum SettingsDescriptorStore {
         "plexServer": SettingDescriptor(
             icon: "server.rack",
             description: "Manage your Plex server connection, view server details, or sign out."
+        ),
+        "jellyfinServer": SettingDescriptor(
+            icon: "play.tv",
+            description: "Manage your Jellyfin server connection, verify the active session, or sign out."
+        ),
+        "jellyfinServerInfo": SettingDescriptor(
+            icon: "server.rack",
+            description: "The Jellyfin server currently connected to this Apple TV."
+        ),
+        "jellyfinUser": SettingDescriptor(
+            icon: "person.crop.circle",
+            description: "The Jellyfin profile used for libraries, playback state, and recommendations."
+        ),
+        "verifyJellyfin": SettingDescriptor(
+            icon: "checkmark.circle",
+            description: "Verify the saved Jellyfin session. Network interruptions keep the login; a revoked token signs out securely."
+        ),
+        "jellyfinSignOut": SettingDescriptor(
+            icon: "rectangle.portrait.and.arrow.right",
+            description: "Sign out of Jellyfin and remove its access token from Keychain."
+        ),
+        "connectJellyfin": SettingDescriptor(
+            icon: "link",
+            description: "Connect with a Jellyfin username and password or use Quick Connect from an already authenticated device."
         ),
         "signOut": SettingDescriptor(
             icon: "rectangle.portrait.and.arrow.right",
@@ -367,6 +391,7 @@ enum SettingsDescriptorStore {
         case .servers: return ("server.rack", .systemOrange)
         case .about: return ("info.circle.fill", .systemGray)
         case .plex: return ("server.rack", .systemOrange)
+        case .jellyfin: return ("play.tv", .systemPurple)
         case .iptv: return ("tv.and.mediabox", .systemBlue)
         case .libraries: return ("sidebar.squares.left", .systemPurple)
         case .homeRows: return ("rectangle.grid.1x2", .systemTeal)

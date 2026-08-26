@@ -12,7 +12,7 @@ import Foundation
 
 enum MediaProviderKind: String, Sendable, Hashable, Codable {
     case plex
-    // .jellyfin added in Wave 2
+    case jellyfin
 }
 
 enum ConnectionState: Sendable, Hashable {

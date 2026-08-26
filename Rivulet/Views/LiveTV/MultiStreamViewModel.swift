@@ -36,6 +36,7 @@ final class MultiStreamViewModel: ObservableObject {
         var playbackState: UniversalPlaybackState
         var currentProgram: UnifiedProgram?
         var isMuted: Bool
+        var resolvedStream: ResolvedLiveTVStream? = nil
 
         // MARK: - Convenience Accessors
 
@@ -229,7 +230,10 @@ final class MultiStreamViewModel: ObservableObject {
 
         // Start playback (resolve = Plex tune step for cloud-EPG/DVB channels)
         let loadStartTime = Date()
-        if let url = await LiveTVDataStore.shared.resolveStreamURL(for: channel) {
+        if let stream = await LiveTVDataStore.shared.resolveStream(for: channel) {
+            let url = stream.url
+            slot.resolvedStream = stream
+            streams[slotIndex].resolvedStream = stream
 
             // Determine stream type for logging
             let streamType: String = {
@@ -260,7 +264,7 @@ final class MultiStreamViewModel: ObservableObject {
             SentryBridge.addBreadcrumb(breadcrumb)
 
             do {
-                try await slot.load(url: url, headers: LiveTVClientIdentity.streamHeaders)
+                try await slot.load(url: url, headers: stream.headers)
                 slot.setMuted(isMuted)
                 slot.play()
                 recoveryAttempts[slot.id] = 0
@@ -342,6 +346,10 @@ final class MultiStreamViewModel: ObservableObject {
         let slot = streams[index]
         markSlotAsIntentionallyStopped(slot.id)
 
+        if let stream = slot.resolvedStream {
+            Task { await LiveTVDataStore.shared.endStream(stream, for: slot.channel) }
+        }
+
         // Stop and cleanup player
         slot.stop()
 
@@ -379,6 +387,9 @@ final class MultiStreamViewModel: ObservableObject {
         healthMonitorTask = nil
         for slot in streams {
             markSlotAsIntentionallyStopped(slot.id)
+            if let stream = slot.resolvedStream {
+                Task { await LiveTVDataStore.shared.endStream(stream, for: slot.channel) }
+            }
             slot.stop()
             cleanupTracking(for: slot.id)
         }
@@ -491,6 +502,9 @@ final class MultiStreamViewModel: ObservableObject {
         markSlotAsIntentionallyStopped(oldSlot.id)
 
         // Stop and cleanup old player
+        if let stream = oldSlot.resolvedStream {
+            await LiveTVDataStore.shared.endStream(stream, for: oldSlot.channel)
+        }
         oldSlot.stop()
         cancellables.removeValue(forKey: oldSlot.id)
         cleanupTracking(for: oldSlot.id)
@@ -519,7 +533,10 @@ final class MultiStreamViewModel: ObservableObject {
         }
 
         // Start playback (resolve = Plex tune step for cloud-EPG/DVB channels)
-        if let url = await LiveTVDataStore.shared.resolveStreamURL(for: channel) {
+        if let stream = await LiveTVDataStore.shared.resolveStream(for: channel) {
+            let url = stream.url
+            newSlot.resolvedStream = stream
+            streams[index].resolvedStream = stream
             // Log stream replacement attempt for debugging
             let breadcrumb = Breadcrumb(level: .info, category: "livetv_playback")
             breadcrumb.message = "Replacing Live TV stream"
@@ -533,7 +550,7 @@ final class MultiStreamViewModel: ObservableObject {
             SentryBridge.addBreadcrumb(breadcrumb)
 
             do {
-                try await newSlot.load(url: url, headers: LiveTVClientIdentity.streamHeaders)
+                try await newSlot.load(url: url, headers: stream.headers)
                 newSlot.setMuted(isMuted)
                 newSlot.play()
             } catch {
@@ -921,10 +938,17 @@ final class MultiStreamViewModel: ObservableObject {
         recoveringSlots.insert(slotId)
         defer { recoveringSlots.remove(slotId) }
 
-        guard let url = await LiveTVDataStore.shared.resolveStreamURL(for: channel) else {
+        let prior = streams[slotIndex].resolvedStream
+        if let prior {
+            await LiveTVDataStore.shared.endStream(prior, for: channel)
+            streams[slotIndex].resolvedStream = nil
+        }
+        guard let stream = await LiveTVDataStore.shared.resolveStream(for: channel) else {
             scheduleAutoRecovery(for: slotId, channel: channel, reason: "no-url")
             return
         }
+        let url = stream.url
+        streams[slotIndex].resolvedStream = stream
 
         recoveryAttempts[slotId, default: 0] += 1
         let attempt = recoveryAttempts[slotId] ?? 0
@@ -946,7 +970,7 @@ final class MultiStreamViewModel: ObservableObject {
         do {
             let slot = streams[slotIndex]
             let muted = slot.isMuted
-            try await slot.load(url: url, headers: LiveTVClientIdentity.streamHeaders)
+            try await slot.load(url: url, headers: stream.headers)
             guard !Task.isCancelled,
                   !intentionallyStoppedSlots.contains(slotId),
                   streams.contains(where: { $0.id == slotId }) else { return }

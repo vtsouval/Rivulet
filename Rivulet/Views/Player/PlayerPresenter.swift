@@ -47,11 +47,17 @@ enum PlayerPresenter {
         animated: Bool = true,
         onDismiss: (() -> Void)? = nil
     ) -> Bool {
-        let allowed = ConnectionAlert.allowPlayback(from: presenter) {
-            present(viewModel: viewModel, from: presenter,
-                    animated: animated, onDismiss: onDismiss)
+        // ConnectionAlert is backed by PlexAuthManager and therefore only
+        // describes Plex reachability. Provider sessions (Jellyfin today,
+        // future backends later) have already completed their own authenticated
+        // playback negotiation and must not be blocked by Plex state.
+        if !viewModel.usesProviderPlayback {
+            let allowed = ConnectionAlert.allowPlayback(from: presenter) {
+                present(viewModel: viewModel, from: presenter,
+                        animated: animated, onDismiss: onDismiss)
+            }
+            guard allowed else { return false }
         }
-        guard allowed else { return false }
         let vc = makeViewController(viewModel: viewModel, onDismiss: onDismiss)
         presenter.topmostPresented.present(vc, animated: animated)
         return true

@@ -68,10 +68,22 @@ struct RivuletApp: App {
         // run: without the first hook the sidebar's conditional TabSection
         // latches to "empty" on a fresh sign-in, and without the second, a
         // sign-out leaves the previous server's hubs on screen.
-        PlexAuthManager.onAuthenticated = { await PlexDataStore.shared.loadLibrariesIfNeeded() }
-        PlexAuthManager.onSignedOut = { PlexDataStore.shared.reset() }
+        PlexAuthManager.onAuthenticated = {
+            await PlexDataStore.shared.loadLibrariesIfNeeded()
+            MediaProviderRegistry.shared.populateFromCurrentAuth()
+        }
+        PlexAuthManager.onSignedOut = {
+            PlexDataStore.shared.reset()
+            MediaProviderRegistry.shared.populateFromCurrentAuth()
+        }
         PlexUserProfileManager.onProfileChanged = { await PlexDataStore.shared.onProfileSwitched() }
         PlexUserProfileManager.onInitialProfileSelected = { LibrarySettingsManager.shared.onProfileSwitched() }
+
+        // Both auth stores restore synchronously. Populate before ContentView
+        // builds the UIKit shell so its first cached Home/Search controllers
+        // are created for the right backend rather than a transient empty/Plex
+        // fallback that would survive the rest of the launch.
+        MediaProviderRegistry.shared.populateFromCurrentAuth()
 
         #if !DEBUG
         // Sentry start is DEFERRED off the launch window. Starting it in init()

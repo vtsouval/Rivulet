@@ -52,7 +52,7 @@ final class CredentialRegistry {
     private(set) var serverCredentials: [ServerCredential] = []
 
     /// Returns the token previously stored under `scope`, or nil.
-    nonisolated func token(for scope: CredentialScope) -> String? {
+    func token(for scope: CredentialScope) -> String? {
         KeychainHelper.get(scope.keychainKey)
     }
 

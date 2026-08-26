@@ -30,6 +30,8 @@ struct TVSidebarView: View {
     @StateObject private var nestedNavState = NestedNavigationState()
     @StateObject private var deepLinkHandler = DeepLinkHandler.shared
     @StateObject private var musicQueue = MusicQueue.shared
+    @State private var providerRegistry = MediaProviderRegistry.shared
+    @State private var providerLibraries: [MediaLibrary] = []
     @AppStorage("combineLiveTVSources") private var combineLiveTVSources = true
     @AppStorage("liveTVAboveLibraries") private var liveTVAboveLibraries = false
     @AppStorage("showDiscoverTab") private var showDiscoverTab = true
@@ -52,11 +54,17 @@ struct TVSidebarView: View {
     }
 
     private var profileName: String {
-        profileManager.selectedUser?.displayName ?? authManager.username ?? "Account"
+        if providerRegistry.primaryProvider?.kind == .jellyfin {
+            return JellyfinSessionStore.shared.currentSession?.user.name ?? "Jellyfin"
+        }
+        return profileManager.selectedUser?.displayName ?? authManager.username ?? "Account"
     }
 
     private var isMusicLibrarySelected: Bool {
         guard case .library(let key) = selectedTab else { return false }
+        if providerRegistry.primaryProvider?.kind == .jellyfin {
+            return providerLibraries.first(where: { $0.id == key })?.kind == .music
+        }
         return dataStore.libraries.first(where: { $0.key == key })?.isMusicLibrary ?? false
     }
 
@@ -83,7 +91,20 @@ struct TVSidebarView: View {
     /// into the shell. The old snapshot dance existed only because the system
     /// sidebar wedged on live mutation; ours does not.
     private var shellSections: [ShellSidebarSection] {
-        ShellSidebarModel.sections(
+        if providerRegistry.primaryProvider?.kind == .jellyfin {
+            let session = JellyfinSessionStore.shared.currentSession
+            return ShellSidebarModel.sections(
+                mediaLibraries: providerLibraries,
+                liveTVSources: liveTVDataStore.sources,
+                combineLiveTV: combineLiveTVSources,
+                showDiscover: showDiscoverTab && authManager.hasCredentials,
+                discoverAbove: discoverAboveLibraries,
+                liveTVAbove: liveTVAboveLibraries,
+                serverName: session?.serverURL.host ?? "Jellyfin",
+                profileName: profileName
+            )
+        }
+        return ShellSidebarModel.sections(
             libraries: dataStore.visibleMediaLibraries,
             liveTVSources: liveTVDataStore.sources,
             combineLiveTV: combineLiveTVSources,
@@ -332,6 +353,9 @@ struct TVSidebarView: View {
                 }
             }
         }
+        .task(id: providerRegistry.primaryProviderID) {
+            await loadProviderLibrariesIfNeeded()
+        }
         .task {
             // Start background preloading of Live TV data (low priority)
             liveTVDataStore.startBackgroundPreload()
@@ -421,6 +445,24 @@ struct TVSidebarView: View {
     /// Still hosted, and correctly so: Music and Live TV are genuinely
     /// SwiftUI, and Home carries the welcome / profile-gate overlays.
     private func contentViewController(for tab: SidebarTab) -> UIViewController {
+        if let provider = providerRegistry.primaryProvider, provider.kind == .jellyfin {
+            switch tab {
+            case .home:
+                return ProviderBrowseViewController(providerID: provider.id, mode: .home)
+            case .search:
+                let search = ProviderSearchContainerViewController(providerID: provider.id)
+                search.onNestedChange = { [nestedNavState] isNested in
+                    nestedNavState.isNested = isNested
+                }
+                return search
+            case .library(let key):
+                if let library = providerLibraries.first(where: { $0.id == key }), library.kind != .music {
+                    return ProviderBrowseViewController(providerID: provider.id, mode: .library(library))
+                }
+            default:
+                break
+            }
+        }
         switch tab {
         case .discover:
             return PlexHomeViewController(mode: .discover)
@@ -442,6 +484,25 @@ struct TVSidebarView: View {
             break
         }
         return RootShellHostingController(rootView: AnyView(tabContent(for: tab)))
+    }
+
+    /// Loads the active non-Plex provider's sidebar libraries. The browse page
+    /// fetches its own content, so this request is intentionally limited to the
+    /// lightweight `/UserViews` equivalent needed to build navigation.
+    private func loadProviderLibrariesIfNeeded() async {
+        guard let provider = providerRegistry.primaryProvider, provider.kind == .jellyfin else {
+            providerLibraries = []
+            return
+        }
+        do {
+            providerLibraries = try await provider.libraries()
+                .filter { $0.kind != .photos && $0.kind != .liveTV }
+        } catch {
+            // Keep the previous navigation snapshot through transient outages.
+            libraryIndexLog.error(
+                "Provider library fetch failed: \(error.localizedDescription, privacy: .public)"
+            )
+        }
     }
 
     /// Settings tab content. The Settings surface is pure UIKit
@@ -538,7 +599,7 @@ struct TVSidebarView: View {
                 Text("Welcome to Rivulet")
                     .font(.system(size: 46, weight: .semibold))
 
-                Text("Connect your Plex server in Settings to get started.")
+                Text("Connect Jellyfin or Plex in Settings to get started.")
                     .font(.system(size: 28))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -696,4 +757,3 @@ struct TVSidebarView: View {
         }
     }
 }
-

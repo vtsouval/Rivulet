@@ -29,6 +29,58 @@ struct ShellSidebarSection: Hashable {
 /// Settings always last) stay unit-testable.
 enum ShellSidebarModel {
 
+    /// Provider-neutral counterpart used when Jellyfin is the active browse
+    /// backend. Kept as an overload instead of converting PlexLibrary at the
+    /// view layer, so provider-native IDs stay intact through navigation.
+    // swiftlint:disable:next function_parameter_count
+    static func sections(
+        mediaLibraries: [MediaLibrary],
+        liveTVSources: [LiveTVDataStore.LiveTVSourceInfo],
+        combineLiveTV: Bool,
+        showDiscover: Bool,
+        discoverAbove: Bool,
+        liveTVAbove: Bool,
+        serverName: String?,
+        profileName: String
+    ) -> [ShellSidebarSection] {
+        var sections: [ShellSidebarSection] = []
+        var top: [ShellSidebarItem] = [
+            ShellSidebarItem(tab: .account, title: profileName, icon: "person.crop.circle.fill"),
+            ShellSidebarItem(tab: .search, title: "Search", icon: "magnifyingglass"),
+            ShellSidebarItem(tab: .home, title: "Home", icon: "house.fill")
+        ]
+        let discover = ShellSidebarItem(tab: .discover, title: "Discover", icon: "sparkles")
+        if showDiscover && discoverAbove { top.append(discover) }
+        sections.append(ShellSidebarSection(title: nil, items: top))
+
+        let librarySection = ShellSidebarSection(
+            title: serverName ?? "Jellyfin",
+            items: mediaLibraries.map {
+                ShellSidebarItem(
+                    tab: .library(key: $0.id),
+                    title: $0.title,
+                    icon: icon(forLibraryKind: $0.kind)
+                )
+            }
+        )
+        let liveTVSection = ShellSidebarSection(
+            title: "Live TV",
+            items: liveTVItems(sources: liveTVSources, combined: combineLiveTV)
+        )
+        sections.append(contentsOf: (liveTVAbove
+            ? [liveTVSection, librarySection]
+            : [librarySection, liveTVSection]).filter { !$0.items.isEmpty })
+
+        if showDiscover && !discoverAbove {
+            sections.append(ShellSidebarSection(title: nil, items: [discover]))
+        }
+        sections.append(ShellSidebarSection(
+            title: nil,
+            items: [ShellSidebarItem(tab: .settings, title: "Settings", icon: "gearshape.fill")]
+        ))
+        return sections
+    }
+
     // swiftlint:disable:next function_parameter_count
     static func sections(
         libraries: [PlexLibrary],
@@ -87,6 +139,17 @@ enum ShellSidebarModel {
         }
     }
 
+    static func icon(forLibraryKind kind: MediaLibrary.LibraryKind) -> String {
+        switch kind {
+        case .movies: return "film.fill"
+        case .shows: return "tv.fill"
+        case .music: return "music.note"
+        case .photos: return "photo.fill"
+        case .liveTV: return "play.rectangle.fill"
+        case .mixed: return "folder.fill"
+        }
+    }
+
     private static func liveTVItems(
         sources: [LiveTVDataStore.LiveTVSourceInfo],
         combined: Bool
@@ -108,6 +171,7 @@ enum ShellSidebarModel {
         switch source.sourceType {
         case .plex: return "play.rectangle.fill"
         case .dispatcharr: return "antenna.radiowaves.left.and.right"
+        case .jellyfin: return "server.rack"
         default: return "list.bullet.rectangle"
         }
     }

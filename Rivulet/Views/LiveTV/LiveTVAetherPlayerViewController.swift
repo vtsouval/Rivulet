@@ -77,6 +77,10 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     /// can be cancelled on dismissal — otherwise a slow Plex tune could finish
     /// after teardown and spin a new player/keep-alive on an off-screen VC.
     private var streamLoadTask: Task<Void, Never>?
+    /// Complete provider-owned request for the active channel. Keeping this
+    /// object (rather than only its URL) preserves Jellyfin auth headers and
+    /// lets teardown release its server-side LiveStream immediately.
+    private var resolvedStream: ResolvedLiveTVStream?
 
     /// Measures time-to-first-frame for the in-flight join, split into handshake
     /// / engine load / holdback fill. One per load attempt; a fallback retry
@@ -306,18 +310,25 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             // Resolve performs the Plex tune step for cloud-EPG/DVB channels;
             // other sources pass straight through.
             joinTelemetry = LiveJoinTelemetry()
-            guard let url = await LiveTVDataStore.shared.resolveStreamURL(for: channel) else {
+            guard let stream = await LiveTVDataStore.shared.resolveStream(for: channel) else {
                 finishJoinTelemetry { $0.failed(reason: "resolve_failed") }
                 if Task.isCancelled { return }
                 onDismiss?()
                 dismiss(animated: true)
                 return
             }
-            if Task.isCancelled { finishJoinTelemetry { $0.abandoned() }; return }
+            self.resolvedStream = stream
+            let url = stream.url
+            if Task.isCancelled {
+                self.resolvedStream = nil
+                await LiveTVDataStore.shared.endStream(stream, for: channel)
+                finishJoinTelemetry { $0.abandoned() }
+                return
+            }
             // Raw tuned-session HLS must go through the engine demuxer:
             // AVPlayer's native HLS path can't decode broadcast mp2 audio
             // or the DVB/teletext subtitles that direct play preserves.
-            let forceEngineDemux = url.path.hasPrefix("/livetv/sessions/")
+            let forceEngineDemux = stream.forceEngineDemux || url.path.hasPrefix("/livetv/sessions/")
             let route = AetherPlayer.liveRoute(for: url, forceEngineDemux: forceEngineDemux)
             isNativeHLSRoute = route == .nativeHLS
             joinTelemetry?.resolveFinished(url: url, route: route)
@@ -325,7 +336,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             do {
                 try await aether.loadLive(
                     url: url,
-                    headers: LiveTVClientIdentity.streamHeaders,
+                    headers: stream.headers,
                     forceEngineDemux: forceEngineDemux
                 )
                 if Task.isCancelled { finishJoinTelemetry { $0.abandoned() }; return }
@@ -367,6 +378,13 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     private func teardownPlaybackSession() {
         streamLoadTask?.cancel()
         streamLoadTask = nil
+        if let stream = resolvedStream {
+            let outgoingChannel = channel
+            resolvedStream = nil
+            Task {
+                await LiveTVDataStore.shared.endStream(stream, for: outgoingChannel)
+            }
+        }
         // Backing out before first frame still ends the transaction. An
         // unfinished one would otherwise hang until the SDK times it out and
         // land as a bogus outlier.
@@ -1209,8 +1227,17 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         loadingSpinner.startAnimating()
         streamLoadTask = Task { @MainActor in
             defer { isFallbackInFlight = false }
-            guard let freshURL = await LiveTVDataStore.shared.resolveStreamURL(for: channel) else { return }
-            if Task.isCancelled { return }
+            if let prior = resolvedStream {
+                await LiveTVDataStore.shared.endStream(prior, for: channel)
+                resolvedStream = nil
+            }
+            guard let freshStream = await LiveTVDataStore.shared.resolveStream(for: channel) else { return }
+            if Task.isCancelled {
+                await LiveTVDataStore.shared.endStream(freshStream, for: channel)
+                return
+            }
+            resolvedStream = freshStream
+            let freshURL = freshStream.url
             startLiveSessionKeepAlive(for: freshURL)
 
             if stage == 1 {
@@ -1231,8 +1258,8 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 do {
                     aetherPlayer?.stop()
                     try await aetherPlayer?.loadLive(url: retryURL,
-                                                     headers: LiveTVClientIdentity.streamHeaders,
-                                                     forceEngineDemux: !isPlaylist)
+                                                     headers: freshStream.headers,
+                                                     forceEngineDemux: freshStream.forceEngineDemux || !isPlaylist)
                     if Task.isCancelled { return }
                     aetherPlayer?.play()
                 } catch {
@@ -1246,6 +1273,16 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 aetherPlayer?.unbind(view: engineSurfaceView)
                 aetherPlayer = nil
 
+                // A bare AVPlayer cannot attach Jellyfin's authorization
+                // header through its public API. Keep the final fallback for
+                // URL-authenticated Plex/IPTV sources; authenticated streams
+                // have already received two Aether attempts above.
+                guard !freshStream.headers.keys.contains(where: {
+                    $0.caseInsensitiveCompare("Authorization") == .orderedSame
+                }) else {
+                    loadingSpinner.stopAnimating()
+                    return
+                }
                 let avPlayer = AVPlayer(url: freshURL)
                 let layer = AVPlayerLayer(player: avPlayer)
                 layer.frame = view.bounds

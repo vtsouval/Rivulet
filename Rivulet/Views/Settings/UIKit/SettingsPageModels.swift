@@ -154,6 +154,7 @@ enum SettingsContent {
         case .music:       return music
         case .servers:     return servers
         case .plex:        return plex
+        case .jellyfin:    return jellyfin
         case .libraries:   return libraries
         case .homeRows:    return homeRows
         case .cache:       return cache
@@ -422,7 +423,8 @@ enum SettingsContent {
 
     private static var servers: [SettingsRowItem] {
         [
-            SettingsRowItem(id: "plexServer", title: "Plex Server", kind: .navigation(.plex))
+            SettingsRowItem(id: "plexServer", title: "Plex Server", kind: .navigation(.plex)),
+            SettingsRowItem(id: "jellyfinServer", title: "Jellyfin Server", kind: .navigation(.jellyfin))
         ]
     }
 
@@ -435,6 +437,18 @@ enum SettingsContent {
             if let name = auth.savedServerName {
                 rows.append(SettingsRowItem(id: "plexServerInfo", title: "Server",
                                             kind: .info(value: { name })))
+            }
+            if let plex = MediaProviderRegistry.shared.enabledProviders().first(where: { $0.kind == .plex }) {
+                if MediaProviderRegistry.shared.primaryProviderID == plex.id {
+                    rows.append(SettingsRowItem(id: "plexActiveProvider", title: "Media Provider",
+                                                kind: .info(value: { "Active" })))
+                } else {
+                    rows.append(SettingsRowItem(id: "usePlexProvider", title: "Use Plex for Media",
+                                                kind: .action(destructive: false, handler: { vc in
+                        MediaProviderRegistry.shared.selectPrimaryProvider(plex.id)
+                        (vc as? SettingsPageViewController)?.reloadRows()
+                    })))
+                }
             }
             rows.append(SettingsRowItem(id: "signOut", title: "Sign Out",
                                         kind: .action(destructive: true, handler: { vc in
@@ -455,6 +469,61 @@ enum SettingsContent {
                 }))
             ]
         }
+    }
+
+    // MARK: Jellyfin (native sign-in / sign-out)
+
+    private static var jellyfin: [SettingsRowItem] {
+        if let session = JellyfinSessionStore.shared.currentSession {
+            var rows: [SettingsRowItem] = [
+                SettingsRowItem(id: "jellyfinServerInfo", title: "Server", kind: .info(value: {
+                    session.serverURL.host ?? session.serverURL.absoluteString
+                })),
+                SettingsRowItem(id: "jellyfinUser", title: "Profile", kind: .info(value: {
+                    session.user.name
+                }))
+            ]
+            if let jellyfin = MediaProviderRegistry.shared.enabledProviders().first(where: { $0.kind == .jellyfin }) {
+                if MediaProviderRegistry.shared.primaryProviderID == jellyfin.id {
+                    rows.append(SettingsRowItem(id: "jellyfinActiveProvider", title: "Media Provider",
+                                                kind: .info(value: { "Active" })))
+                } else {
+                    rows.append(SettingsRowItem(id: "useJellyfinProvider", title: "Use Jellyfin for Media",
+                                                kind: .action(destructive: false, handler: { vc in
+                        MediaProviderRegistry.shared.selectPrimaryProvider(jellyfin.id)
+                        (vc as? SettingsPageViewController)?.reloadRows()
+                    })))
+                }
+            }
+            rows.append(contentsOf: [
+                SettingsRowItem(id: "verifyJellyfin", title: "Check Connection",
+                                kind: .action(destructive: false, handler: { vc in
+                    Task { @MainActor in
+                        _ = await JellyfinSessionStore.shared.validateCurrentSession()
+                        MediaProviderRegistry.shared.populateFromCurrentAuth()
+                        (vc as? SettingsPageViewController)?.reloadRows()
+                    }
+                })),
+                SettingsRowItem(id: "jellyfinSignOut", title: "Sign Out",
+                                kind: .action(destructive: true, handler: { vc in
+                    Task { @MainActor in
+                        await JellyfinSessionStore.shared.signOut()
+                        MediaProviderRegistry.shared.populateFromCurrentAuth()
+                        (vc as? SettingsPageViewController)?.reloadRows()
+                    }
+                }))
+            ])
+            return rows
+        }
+
+        return [
+            SettingsRowItem(id: "connectJellyfin", title: "Connect to Jellyfin",
+                            kind: .action(destructive: false, handler: { presenter in
+                let auth = JellyfinAuthViewController()
+                auth.modalPresentationStyle = .fullScreen
+                presenter.present(auth, animated: true)
+            }))
+        ]
     }
 
     // MARK: Home Rows (local subtractive filter over the server's row set)

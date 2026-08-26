@@ -4,7 +4,7 @@
 
 # Rivulet
 
-**A native tvOS video app for Plex and Live TV.**
+**A native tvOS video app for Jellyfin, Plex, and Live TV.**
 Built for simplicity.
 
 <a href="https://apps.apple.com/us/app/rivulet-for-plex/id6756892857">
@@ -64,10 +64,18 @@ Playback runs on [AetherEngine](https://github.com/superuser404notfound/AetherEn
 - **Audio** — AAC, AC3, E-AC3 (including Atmos / JOC), TrueHD, DTS, DTS-HD MA, FLAC, ALAC, MP3, and PCM.
 - **Subtitles** — Text (SRT, ASS/SSA) and bitmap (PGS, DVB).
 
+### Jellyfin
+
+- Native Jellyfin sign-in by password or Quick Connect, with tokens stored in the Keychain.
+- Jellyfin Home, libraries, search, Continue Watching, Recently Added, artwork, seasons, episodes, people, and user state.
+- Direct Jellyfin playback negotiation with resume position, audio/subtitle selection, progress reporting, and live-session cleanup.
+- Plex and Jellyfin accounts can coexist; choose the active provider in Settings without signing out of the other service.
+
 ### Live TV
 
 - Dispatcharr and generic M3U/XMLTV sources
 - Plex Live TV
+- Jellyfin Live TV, including channel metadata, guide data, authenticated playback, and server live-session cleanup
 - Channel guide, favorites, and recently watched
 - Multi-stream mode: watch several channels at once in a grid, or promote one to focus while the others play muted
 
@@ -105,6 +113,7 @@ Chasing Plexamp on the features side. Long way to go.
 
 - Apple TV running tvOS 26 or later
 - Xcode 26+ for building
+- Jellyfin server (tested against 10.11.11)
 - Plex Media Server (for Plex features)
 - M3U/XMLTV source or Dispatcharr (for Live TV)
 
@@ -126,6 +135,15 @@ xcodebuild -scheme Rivulet -destination 'generic/platform=tvOS' build
 # The iOS/iPadOS app has its own scheme
 xcodebuild -scheme "Rivulet iOS" -destination 'generic/platform=iOS' build
 ```
+
+### Connecting Jellyfin
+
+1. Open **Settings > Servers > Jellyfin Server**.
+2. Enter the externally reachable Jellyfin server URL, including `https://`, then sign in with a username and password or use Quick Connect.
+3. If Plex is also configured, use **Settings > Servers > Active provider** to select Jellyfin.
+4. Jellyfin libraries appear in the sidebar. Home, Search, library browsing, playback, resume progress, and Jellyfin Live TV then use the selected Jellyfin account.
+
+Passwords are never persisted. The app stores only Jellyfin's revocable access token in the Apple Keychain. Media playback is requested through Jellyfin; the client does not need direct access to any upstream media resolver used by the server.
 
 ## Repository layout
 

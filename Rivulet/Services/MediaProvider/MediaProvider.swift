@@ -61,6 +61,10 @@ protocol MediaProvider: Sendable, Identifiable {
     // MARK: - Playback
     func resolveStream(for itemRef: MediaItemRef, sourceID: String?) async throws -> StreamInfo
     func progressReporter(for itemRef: MediaItemRef, playSessionID: String?) -> any ProgressReporter
+    /// Builds a reporter with the complete negotiated stream context. The
+    /// default keeps existing providers source-compatible; backends with live
+    /// stream lifecycle or source-specific reporting can override it.
+    func progressReporter(for itemRef: MediaItemRef, streamInfo: StreamInfo) -> any ProgressReporter
 
     // MARK: - Per-item track selection (server-side persistent)
 
@@ -94,5 +98,9 @@ protocol MediaProvider: Sendable, Identifiable {
 }
 
 extension MediaProvider {
+    func progressReporter(for itemRef: MediaItemRef, streamInfo: StreamInfo) -> any ProgressReporter {
+        progressReporter(for: itemRef, playSessionID: streamInfo.playSessionID)
+    }
+
     func contentAdvisory(for ref: MediaItemRef) async throws -> ContentAdvisory? { nil }
 }

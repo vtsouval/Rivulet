@@ -23,6 +23,7 @@ struct ContentView: View {
     @StateObject private var dataStore = PlexDataStore.shared
     @StateObject private var authManager = PlexAuthManager.shared
     @StateObject private var profileManager = PlexUserProfileManager.shared
+    @State private var jellyfinSessionStore = JellyfinSessionStore.shared
     #if DEBUG
     @State private var showSplash = false
     #else
@@ -90,7 +91,21 @@ struct ContentView: View {
             MediaProviderRegistry.shared.populateFromCurrentAuth()
             MusicProviderRegistry.shared.populateFromCurrentAuth()
             MusicQueue.shared.configure(registry: MusicProviderRegistry.shared)
+            await LiveTVDataStore.shared.syncJellyfinSource(
+                session: jellyfinSessionStore.currentSession
+            )
             StartupTimer.mark("registries bootstrapped")
+
+            // A restored Jellyfin token is useful immediately for cached
+            // navigation, then validated off the launch-critical path. An
+            // authentication rejection removes only Jellyfin; transient
+            // connectivity failures deliberately keep the restored session.
+            if jellyfinSessionStore.currentSession != nil {
+                Task { @MainActor in
+                    _ = await jellyfinSessionStore.validateCurrentSession()
+                    MediaProviderRegistry.shared.populateFromCurrentAuth()
+                }
+            }
 
             splashLog.info("Splash task started — hasCredentials=\(self.authManager.hasCredentials)")
             if !authManager.hasCredentials {
@@ -112,6 +127,14 @@ struct ContentView: View {
         .onChange(of: authManager.selectedServerToken) { _, _ in
             MediaProviderRegistry.shared.populateFromCurrentAuth()
             MusicProviderRegistry.shared.populateFromCurrentAuth()
+        }
+        .onChange(of: jellyfinSessionStore.currentSession) { _, _ in
+            MediaProviderRegistry.shared.populateFromCurrentAuth()
+            Task { @MainActor in
+                await LiveTVDataStore.shared.syncJellyfinSource(
+                    session: jellyfinSessionStore.currentSession
+                )
+            }
         }
         // Refresh the server-side library list on every transition
         // to .active so a library added or renamed on the Plex server

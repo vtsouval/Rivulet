@@ -15,12 +15,14 @@ import Foundation
 /// Types of Live TV sources supported
 enum LiveTVSourceType: String, Codable, CaseIterable, Sendable {
     case plex = "plex"
+    case jellyfin = "jellyfin"
     case dispatcharr = "dispatcharr"
     case genericM3U = "m3u"
 
     var displayName: String {
         switch self {
         case .plex: return "Plex Live TV"
+        case .jellyfin: return "Jellyfin Live TV"
         case .dispatcharr: return "Dispatcharr"
         case .genericM3U: return "M3U Playlist"
         }
@@ -29,9 +31,36 @@ enum LiveTVSourceType: String, Codable, CaseIterable, Sendable {
     var iconName: String {
         switch self {
         case .plex: return "server.rack"
+        case .jellyfin: return "play.tv"
         case .dispatcharr: return "antenna.radiowaves.left.and.right"
         case .genericM3U: return "list.bullet"
         }
+    }
+}
+
+// MARK: - Resolved Stream
+
+/// A provider-neutral, playable Live TV request. The URL and headers are kept
+/// together because Jellyfin intentionally authenticates media requests with
+/// headers while Plex and most M3U providers authenticate in the URL itself.
+/// `sessionID` is opaque to the data store and is handed back to the provider
+/// on teardown so server-side tuner/live-stream resources can be released.
+struct ResolvedLiveTVStream: Sendable {
+    let url: URL
+    let headers: [String: String]
+    let forceEngineDemux: Bool
+    let sessionID: String?
+
+    init(
+        url: URL,
+        headers: [String: String] = LiveTVClientIdentity.streamHeaders,
+        forceEngineDemux: Bool = false,
+        sessionID: String? = nil
+    ) {
+        self.url = url
+        self.headers = headers
+        self.forceEngineDemux = forceEngineDemux
+        self.sessionID = sessionID
     }
 }
 
@@ -202,6 +231,15 @@ protocol LiveTVProvider: Sendable {
     /// to `buildStreamURL(for:)` for providers with directly playable URLs.
     func resolveStreamURL(for channel: UnifiedChannel) async -> URL?
 
+    /// Resolve the complete playable request, including provider-required
+    /// headers and an opaque lifecycle token. Existing providers get the same
+    /// behavior as before through the default implementation.
+    func resolveStream(for channel: UnifiedChannel) async -> ResolvedLiveTVStream?
+
+    /// End a previously resolved session. Providers without a server-side
+    /// resource to release use the default no-op.
+    func endStream(_ stream: ResolvedLiveTVStream) async
+
     /// Channel logos discovered in the EPG/XMLTV data, keyed by unified channel
     /// id. Used to fill in channel artwork when the playlist (M3U) didn't supply
     /// a `tvg-logo`. Defaults to empty for sources without XMLTV channel icons.
@@ -216,6 +254,16 @@ extension LiveTVProvider {
     func resolveStreamURL(for channel: UnifiedChannel) async -> URL? {
         buildStreamURL(for: channel)
     }
+
+    func resolveStream(for channel: UnifiedChannel) async -> ResolvedLiveTVStream? {
+        guard let url = await resolveStreamURL(for: channel) else { return nil }
+        return ResolvedLiveTVStream(
+            url: url,
+            forceEngineDemux: url.path.hasPrefix("/livetv/sessions/")
+        )
+    }
+
+    func endStream(_ stream: ResolvedLiveTVStream) async {}
 }
 
 // MARK: - Provider Errors

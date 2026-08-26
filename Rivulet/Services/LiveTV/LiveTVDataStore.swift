@@ -104,7 +104,7 @@ class LiveTVDataStore: ObservableObject {
 
     struct SourceConfiguration: Codable {
         let id: String
-        let type: String  // "dispatcharr", "m3u", "plex"
+        let type: String  // "dispatcharr", "m3u", "plex", "jellyfin"
         let name: String
         let baseURL: String?
         let m3uURL: String?
@@ -302,6 +302,23 @@ class LiveTVDataStore: ObservableObject {
         await updateSourceInfo()
     }
 
+    /// Reconcile the authenticated Jellyfin server into the unified Live TV
+    /// source registry. Jellyfin credentials remain owned by
+    /// `JellyfinSessionStore`; this store persists only the non-secret source
+    /// identity, just as it does for Plex.
+    func syncJellyfinSource(session: JellyfinAuthenticatedSession?) async {
+        let existingIDs = providers.compactMap { entry in
+            entry.value.sourceType == .jellyfin ? entry.key : nil
+        }
+        for id in existingIDs { providers.removeValue(forKey: id) }
+
+        if let session, let provider = try? JellyfinLiveTVProvider(session: session) {
+            providers[provider.sourceId] = provider
+        }
+        saveSources()
+        await updateSourceInfo()
+    }
+
     /// Remove a source by ID
     func removeSource(id: String) async {
         providers.removeValue(forKey: id)
@@ -371,6 +388,14 @@ class LiveTVDataStore: ObservableObject {
                     }
                 }
 
+            case "jellyfin":
+                // Tokens are restored by JellyfinSessionStore/Keychain, never
+                // copied into the Live TV source configuration.
+                if let session = JellyfinSessionStore.shared.currentSession,
+                   let provider = try? JellyfinLiveTVProvider(session: session) {
+                    providers[provider.sourceId] = provider
+                }
+
             default:
                 break
             }
@@ -422,6 +447,19 @@ class LiveTVDataStore: ObservableObject {
                         type: "plex",
                         name: provider.displayName,
                         baseURL: plexProvider.serverURL,
+                        m3uURL: nil,
+                        epgURL: nil,
+                        apiToken: nil
+                    ))
+                }
+
+            case .jellyfin:
+                if let jellyfinProvider = provider as? JellyfinLiveTVProvider {
+                    configs.append(SourceConfiguration(
+                        id: id,
+                        type: "jellyfin",
+                        name: provider.displayName,
+                        baseURL: jellyfinProvider.serverURL.absoluteString,
                         m3uURL: nil,
                         epgURL: nil,
                         apiToken: nil
@@ -967,11 +1005,20 @@ class LiveTVDataStore: ObservableObject {
     /// setup first (Plex cloud-EPG/DVB channels need a tune before the
     /// transcoder will serve them). Prefer this over `buildStreamURL(for:)`
     /// at playback time; the sync variant remains for availability checks.
-    func resolveStreamURL(for channel: UnifiedChannel) async -> URL? {
+    func resolveStream(for channel: UnifiedChannel) async -> ResolvedLiveTVStream? {
         guard let provider = providers[channel.sourceId] else {
-            return channel.streamURL
+            return channel.streamURL.map { ResolvedLiveTVStream(url: $0) }
         }
-        return await provider.resolveStreamURL(for: channel)
+        return await provider.resolveStream(for: channel)
+    }
+
+    func endStream(_ stream: ResolvedLiveTVStream, for channel: UnifiedChannel) async {
+        guard let provider = providers[channel.sourceId] else { return }
+        await provider.endStream(stream)
+    }
+
+    func resolveStreamURL(for channel: UnifiedChannel) async -> URL? {
+        await resolveStream(for: channel)?.url
     }
 
     func buildStreamURL(for channel: UnifiedChannel) -> URL? {
