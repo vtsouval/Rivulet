@@ -29,6 +29,19 @@ final class HomeComposerTests: XCTestCase {
         XCTAssertTrue(hubs.isEmpty)
     }
 
+    func test_prefersNativeHubsForAnyProvider() async throws {
+        let stub = StubMediaProvider()
+        stub.nativeHubs = [MediaHub(
+            id: "personal", providerID: stub.id, title: "Top Picks for You",
+            style: .shelf, items: [makeItem("pick")]
+        )]
+        stub.continueWatchingItems = [makeItem("fallback")]
+
+        let hubs = try await HomeComposer.compose(provider: stub)
+        XCTAssertEqual(hubs.map(\.title), ["Top Picks for You"])
+        XCTAssertEqual(hubs.first?.items.first?.ref.itemID, "pick")
+    }
+
     private func makeItem(_ id: String) -> MediaItem {
         MediaItem(
             ref: MediaItemRef(providerID: "stub", itemID: id),
@@ -52,6 +65,7 @@ final class StubMediaProvider: MediaProvider, @unchecked Sendable {
 
     var continueWatchingItems: [MediaItem] = []
     var recentlyAddedItems: [MediaItem] = []
+    var nativeHubs: [MediaHub] = []
 
     func libraries() async throws -> [MediaLibrary] { [] }
     func items(in library: MediaLibrary, sort: SortOption, page: Page) async throws -> PagedResult<MediaItem> {
@@ -67,7 +81,7 @@ final class StubMediaProvider: MediaProvider, @unchecked Sendable {
     }
     func continueWatching(limit: Int) async throws -> [MediaItem] { continueWatchingItems }
     func recentlyAdded(limit: Int) async throws -> [MediaItem] { recentlyAddedItems }
-    func hubs() async throws -> [MediaHub] { [] }
+    func hubs() async throws -> [MediaHub] { nativeHubs }
     func hubs(in library: MediaLibrary) async throws -> [MediaHub] { [] }
     func resolveStream(for itemRef: MediaItemRef, sourceID: String?) async throws -> StreamInfo {
         throw MediaProviderError.notFound

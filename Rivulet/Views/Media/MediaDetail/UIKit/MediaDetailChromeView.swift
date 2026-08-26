@@ -661,11 +661,12 @@ final class MediaDetailChromeView: UIView {
     private func applyDetail(item: MediaItem, detail: MediaItemDetail) {
         rebuildGenreRow(item: item, detail: detail)
         rebuildQualityRow(item: item, detail: detail)
-        if let s = item.seasonNumber, let e = item.episodeNumber,
+        if let coordinate = item.episodeCoordinate,
            let overview = detail.item.overview, !overview.isEmpty {
-            // Episode: bold "S1, E1:" prefix before the synopsis.
+            // Episode: bold coordinate prefix (including "Special 1") before
+            // the synopsis, shared with every other native detail surface.
             let color = UIColor.white.withAlphaComponent(0.85)
-            let attr = NSMutableAttributedString(string: "S\(s), E\(e): ", attributes: [
+            let attr = NSMutableAttributedString(string: "\(coordinate): ", attributes: [
                 .font: UIFont.systemFont(ofSize: 24, weight: .bold), .foregroundColor: color])
             attr.append(NSAttributedString(string: overview, attributes: [
                 .font: UIFont.systemFont(ofSize: 24, weight: .regular), .foregroundColor: color]))

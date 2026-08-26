@@ -16,10 +16,12 @@ import Foundation
 enum HomeComposer {
     /// Returns hubs for the home screen.
     static func compose(provider: any MediaProvider) async throws -> [MediaHub] {
-        if let plex = provider as? PlexProvider {
-            let native = try await plex.hubs()
-            if !native.isEmpty { return native }
-        }
+        // Every provider may now expose editorial hubs. Jellyfin uses this for
+        // personalized Liquid Recommendations, Director's Picks, watchlists,
+        // favorites and richer native discovery; Plex continues to return its
+        // server-curated hubs through the same protocol boundary.
+        let native = (try? await provider.hubs()) ?? []
+        if !native.isEmpty { return native }
         return try await synthesizeFromPrimitives(provider: provider)
     }
 

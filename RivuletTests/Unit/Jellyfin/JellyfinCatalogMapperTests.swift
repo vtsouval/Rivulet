@@ -59,6 +59,30 @@ final class JellyfinCatalogMapperTests: XCTestCase {
         XCTAssertNil(item.episodeNumber)
     }
 
+    func testSeasonZeroAndItsEpisodesRenderAsSpecials() throws {
+        let seasonDTO: JellyfinBaseItemDTO = try decode(
+            """
+            {"Id":"specials","ParentId":"series-1","Name":"Season 0","Type":"Season","IndexNumber":0}
+            """
+        )
+        let episodeDTO: JellyfinBaseItemDTO = try decode(
+            """
+            {
+              "Id":"special-2","Name":"Behind the Scenes","Type":"Episode",
+              "SeriesId":"series-1","SeriesName":"Northern Lights",
+              "SeasonId":"specials","SeasonName":"Season 0",
+              "IndexNumber":2,"ParentIndexNumber":0
+            }
+            """
+        )
+
+        let season = try XCTUnwrap(JellyfinCatalogMapper.item(seasonDTO, context: context))
+        let episode = try XCTUnwrap(JellyfinCatalogMapper.item(episodeDTO, context: context))
+        XCTAssertEqual(season.seasonDisplayTitle, "Specials")
+        XCTAssertEqual(episode.seasonDisplayTitle, "Specials")
+        XCTAssertEqual(episode.episodeHierarchyTitle, "Northern Lights  ·  Special 2")
+    }
+
     func testEpisodeMapsHierarchyProgressDatesAndArtwork() throws {
         let dto: JellyfinBaseItemDTO = try decode(
             """
@@ -72,6 +96,8 @@ final class JellyfinCatalogMapperTests: XCTestCase {
               "ProductionYear":2024,
               "PremiereDate":"2024-01-02T00:00:00.0000000Z",
               "OfficialRating":"TV-14",
+              "Genres":["Animation"],
+              "Tags":["Anime"],
               "RunTimeTicks":27000000000,
               "SeasonId":"season-1",
               "SeasonName":"Season One",
@@ -107,6 +133,9 @@ final class JellyfinCatalogMapperTests: XCTestCase {
         XCTAssertEqual(item.seasonNumber, 1)
         XCTAssertEqual(item.seriesTitle, "The Example Show")
         XCTAssertEqual(item.seasonTitle, "Season One")
+        XCTAssertEqual(item.genres, ["Animation"])
+        XCTAssertEqual(item.tags, ["Anime"])
+        XCTAssertTrue(item.isAnime)
         XCTAssertEqual(item.episodeHierarchyTitle, "The Example Show  ·  S1, E2")
         XCTAssertEqual(item.userState.viewOffset, 12.5)
         XCTAssertTrue(item.userState.isFavorite)

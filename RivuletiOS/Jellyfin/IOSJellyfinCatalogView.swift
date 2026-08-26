@@ -27,11 +27,27 @@ struct IOSJellyfinCatalogView: View {
             ScrollView {
                 LazyVStack(spacing: 16) {
                     filterBar
+                    if filter == .all, genre == nil, !catalogHubs.isEmpty {
+                        if let hero = catalogHubs.first?.items.first {
+                            IOSJellyfinHero(item: hero)
+                                .padding(.bottom, 6)
+                        }
+                        ForEach(Array(catalogHubs.prefix(5))) { hub in
+                            IOSJellyfinShelf(title: hub.title, items: hub.items)
+                                .padding(.bottom, 8)
+                        }
+                        HStack {
+                            Text("All \(kind.title)").font(.title2.bold())
+                            Spacer()
+                        }
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+                    }
                     if items.isEmpty, isLoading {
                         skeleton
                     } else {
                         LazyVGrid(
-                            columns: [GridItem(.adaptive(minimum: 112, maximum: 180), spacing: 14)],
+                            columns: [GridItem(.adaptive(minimum: 145, maximum: 220), spacing: 16)],
                             spacing: 22
                         ) {
                             ForEach(items) { item in
@@ -69,6 +85,18 @@ struct IOSJellyfinCatalogView: View {
                 genres = (try? await jellyfin.genres(for: kind)) ?? []
             }
             .refreshable { await load(force: true) }
+        }
+    }
+
+    private var catalogHubs: [MediaHub] {
+        let expected: Set<MediaKind> = kind == .movies ? [.movie] : [.show, .episode]
+        return jellyfin.homeHubs.compactMap { hub in
+            let values = hub.items.filter { expected.contains($0.kind) }
+            guard !values.isEmpty else { return nil }
+            return MediaHub(
+                id: "\(hub.id):\(kind.rawValue)", providerID: hub.providerID,
+                title: hub.title, style: hub.style, items: values
+            )
         }
     }
 
@@ -142,7 +170,7 @@ struct IOSJellyfinCatalogView: View {
     }
 
     private var skeleton: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 112, maximum: 180), spacing: 14)], spacing: 20) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 145, maximum: 220), spacing: 16)], spacing: 20) {
             ForEach(0..<12, id: \.self) { _ in
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(.white.opacity(0.07)).aspectRatio(2 / 3, contentMode: .fit)

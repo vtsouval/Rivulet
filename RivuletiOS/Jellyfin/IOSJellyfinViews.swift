@@ -258,7 +258,11 @@ struct IOSJellyfinHomeView: View {
         switch mode {
         case .home:
             let values = jellyfin.homeHubs.filter {
-                $0.title == "Continue Watching" || $0.title == "Next Up" || $0.title.hasPrefix("Favorite")
+                $0.title == "Continue Watching"
+                    || $0.title == "Next Up"
+                    || $0.title == "Top Picks for You"
+                    || $0.title == "Director’s Picks"
+                    || $0.title.hasPrefix("Favorite")
             }
             return values.isEmpty ? jellyfin.homeHubs : values
         case .discover:
@@ -521,7 +525,7 @@ struct IOSJellyfinSettingsView: View {
     }
 }
 
-private struct IOSJellyfinHero: View {
+struct IOSJellyfinHero: View {
     let item: MediaItem
 
     var body: some View {
@@ -545,9 +549,12 @@ private struct IOSJellyfinHero: View {
     }
 }
 
-private struct IOSJellyfinShelf: View {
+struct IOSJellyfinShelf: View {
     let title: String
     let items: [MediaItem]
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private var posterWidth: CGFloat { horizontalSizeClass == .regular ? 190 : 156 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -555,7 +562,10 @@ private struct IOSJellyfinShelf: View {
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 14) {
                     ForEach(items) { item in
-                        NavigationLink(value: item) { IOSJellyfinPosterCard(item: item) }.buttonStyle(.plain)
+                        NavigationLink(value: item) {
+                            IOSJellyfinPosterCard(item: item, width: posterWidth)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal)
@@ -567,7 +577,7 @@ private struct IOSJellyfinShelf: View {
 
 struct IOSJellyfinPosterCard: View {
     let item: MediaItem
-    var width: CGFloat? = 138
+    var width: CGFloat? = 156
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -622,7 +632,7 @@ private struct IOSJellyfinSkeletonHome: View {
                 RoundedRectangle(cornerRadius: 28).fill(.white.opacity(0.07)).frame(height: 320)
                 ForEach(0..<2, id: \.self) { _ in
                     RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.08)).frame(width: 180, height: 24)
-                    HStack { ForEach(0..<4, id: \.self) { _ in RoundedRectangle(cornerRadius: 15).fill(.white.opacity(0.06)).frame(width: 138, height: 207) } }
+                    HStack { ForEach(0..<4, id: \.self) { _ in RoundedRectangle(cornerRadius: 15).fill(.white.opacity(0.06)).frame(width: 156, height: 234) } }
                 }
             }
             .padding()

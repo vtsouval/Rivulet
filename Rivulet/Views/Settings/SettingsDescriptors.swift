@@ -98,6 +98,14 @@ enum SettingsDescriptorStore {
             icon: "person.3",
             description: "Uses TMDB metadata and your watch history to surface personalized recommendations of unwatched content."
         ),
+        "showAnime": SettingDescriptor(
+            icon: "sparkles.tv",
+            description: "Shows Anime throughout Home, Discover, Movies, and TV Shows. This preference follows your Jellyfin profile across the web and native apps."
+        ),
+        "blurEpisodeSpoilers": SettingDescriptor(
+            icon: "eye.slash",
+            description: "Blurs artwork and descriptions for unwatched episodes. This preference follows your Jellyfin profile across devices."
+        ),
         "showDiscoverTab": SettingDescriptor(
             icon: "safari",
             description: "Shows the Discover tab in the sidebar for browsing Popular, Top Rated, Upcoming, and more from TMDB."
@@ -107,6 +115,14 @@ enum SettingsDescriptorStore {
             description: "Moves the Discover tab above your Media libraries in the sidebar for quicker access."
         ),
         // MARK: Playback
+        "autoplayTrailers": SettingDescriptor(
+            icon: "film.stack",
+            description: "Automatically plays a title's trailer on its detail page when one is available. The profile setting is shared with the web app."
+        ),
+        "trailerMuted": SettingDescriptor(
+            icon: "speaker.slash.fill",
+            description: "Starts automatic trailers muted. You can unmute from the detail page without changing media playback volume."
+        ),
         "autoSkipIntro": SettingDescriptor(
             icon: "play.circle",
             description: "Automatically skips TV show intros when markers are available. No button press needed."

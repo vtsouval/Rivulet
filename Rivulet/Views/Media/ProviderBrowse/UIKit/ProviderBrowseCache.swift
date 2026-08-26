@@ -19,6 +19,7 @@ actor ProviderBrowseCache {
 
     private var home: [String: Entry<[MediaHub]>] = [:]
     private var libraries: [String: Entry<PagedResult<MediaItem>>] = [:]
+    private var libraryHubs: [String: Entry<[MediaHub]>] = [:]
     private var searches: [String: Entry<[MediaItem]>] = [:]
 
     private let homeTTL: TimeInterval = 90
@@ -48,6 +49,14 @@ actor ProviderBrowseCache {
             Entry(value: result, storedAt: Date())
     }
 
+    func hubs(providerID: String, libraryID: String) -> [MediaHub]? {
+        fresh(libraryHubs["\(providerID)|\(libraryID)"], ttl: libraryTTL)
+    }
+
+    func storeHubs(_ hubs: [MediaHub], providerID: String, libraryID: String) {
+        libraryHubs["\(providerID)|\(libraryID)"] = Entry(value: hubs, storedAt: Date())
+    }
+
     func searchResults(providerID: String, query: String) -> [MediaItem]? {
         fresh(searches[searchKey(providerID: providerID, query: query)], ttl: searchTTL)
     }
@@ -59,6 +68,7 @@ actor ProviderBrowseCache {
     func invalidate(providerID: String) {
         home.removeValue(forKey: providerID)
         libraries = libraries.filter { !$0.key.hasPrefix("\(providerID)|") }
+        libraryHubs = libraryHubs.filter { !$0.key.hasPrefix("\(providerID)|") }
         searches = searches.filter { !$0.key.hasPrefix("\(providerID)|") }
     }
 

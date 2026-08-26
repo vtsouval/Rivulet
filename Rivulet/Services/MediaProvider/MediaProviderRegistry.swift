@@ -119,6 +119,11 @@ final class MediaProviderRegistry {
         do {
             let provider = try JellyfinProvider(session: session)
             reconcileAuthenticatedProvider(provider, for: .jellyfin)
+            Task { @MainActor in
+                JellyfinPlaybackPreferences.applyToLocalDefaults(
+                    await provider.synchronizedPreferences()
+                )
+            }
         } catch {
             // A restored session whose server identity cannot produce a
             // provider must not leave an older Jellyfin provider reachable.

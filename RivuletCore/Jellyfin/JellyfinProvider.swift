@@ -121,6 +121,12 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
                 query.append(URLQueryItem(name: "Filters", value: "IsFavorite"))
             case .unwatched:
                 query.append(URLQueryItem(name: "IsPlayed", value: "false"))
+            case .upcoming:
+                let formatter = ISO8601DateFormatter()
+                query.append(URLQueryItem(name: "MinPremiereDate", value: formatter.string(from: Date())))
+                if let end = Calendar(identifier: .gregorian).date(byAdding: .year, value: 2, to: Date()) {
+                    query.append(URLQueryItem(name: "MaxPremiereDate", value: formatter.string(from: end)))
+                }
             case .all, .watchlist:
                 break
             }
@@ -330,6 +336,7 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
     }
 
     func hubs() async throws -> [MediaHub] {
+        async let preferences = synchronizedPreferences()
         async let resumed = optionalItems { try await self.continueWatching(limit: 24) }
         async let upNext = optionalItems { try await self.nextUp(limit: 24) }
         async let recentMovies = optionalCatalog(JellyfinCatalogQuery(kind: .movies), limit: 30)
@@ -343,44 +350,145 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         async let topShows = optionalCatalog(
             JellyfinCatalogQuery(kind: .shows, sort: .ratingDesc), limit: 24
         )
-        let (continueItems, nextItems, movieItems, showItems, favorites, ratedMovies, ratedShows) = await (
-            resumed, upNext, recentMovies, recentShows, favoriteMovies, topMovies, topShows
+        async let favoriteShows = optionalCatalog(
+            JellyfinCatalogQuery(kind: .shows, filter: .favorites, sort: .addedAtDesc), limit: 24
         )
+        async let watchlistMovies = optionalCatalog(
+            JellyfinCatalogQuery(kind: .movies, filter: .watchlist, sort: .addedAtDesc), limit: 24
+        )
+        async let watchlistShows = optionalCatalog(
+            JellyfinCatalogQuery(kind: .shows, filter: .watchlist, sort: .addedAtDesc), limit: 24
+        )
+        async let upcomingMovies = optionalCatalog(
+            JellyfinCatalogQuery(kind: .movies, filter: .upcoming, sort: .releaseDateDesc), limit: 24
+        )
+        async let upcomingShows = optionalCatalog(
+            JellyfinCatalogQuery(kind: .shows, filter: .upcoming, sort: .releaseDateDesc), limit: 24
+        )
+        async let recommendedMovies = optionalRecommendations(itemType: "Movie", mode: "personal", limit: 24)
+        async let recommendedShows = optionalRecommendations(itemType: "Series", mode: "personal", limit: 24)
+        async let becauseMovies = optionalRecommendations(itemType: "Movie", mode: "because", limit: 20)
+
+        let (
+            synced, continueItems, nextItems, movieItems, showItems,
+            movieFavorites, ratedMovies, ratedShows, showFavorites,
+            movieWatchlist, showWatchlist, upcomingMovieItems, upcomingShowItems,
+            moviePicks, showPicks, because
+        ) = await (
+            preferences, resumed, upNext, recentMovies, recentShows,
+            favoriteMovies, topMovies, topShows, favoriteShows,
+            watchlistMovies, watchlistShows, upcomingMovies, upcomingShows,
+            recommendedMovies, recommendedShows, becauseMovies
+        )
+        let showAnime = synced.animeEnabled ?? true
+        func visible(_ items: [MediaItem]) -> [MediaItem] {
+            showAnime ? items : items.filter { !$0.isAnime }
+        }
+
         var result: [MediaHub] = []
         if !continueItems.isEmpty {
-            result.append(MediaHub(id: "\(id):continue", providerID: id, title: "Continue Watching", style: .shelf, items: continueItems))
+            result.append(MediaHub(id: "\(id):continue", providerID: id, title: "Continue Watching", style: .shelf, items: visible(continueItems)))
         }
         if !nextItems.isEmpty {
-            result.append(MediaHub(id: "\(id):next", providerID: id, title: "Next Up", style: .shelf, items: nextItems))
+            result.append(MediaHub(id: "\(id):next", providerID: id, title: "Next Up", style: .shelf, items: visible(nextItems)))
         }
+        let personalPicks = visible(interleaved(moviePicks.items, showPicks.items)).prefix(24)
+        if !personalPicks.isEmpty {
+            result.append(MediaHub(id: "\(id):picks", providerID: id, title: "Top Picks for You", style: .shelf, items: Array(personalPicks)))
+        }
+        if !because.items.isEmpty {
+            result.append(MediaHub(id: "\(id):because", providerID: id, title: because.title ?? "Because You Watched", style: .shelf, items: visible(because.items)))
+        }
+        let editorial = visible(dailyRotated(ratedMovies, limit: 18))
+        if !editorial.isEmpty {
+            result.append(MediaHub(id: "\(id):directors-picks", providerID: id, title: "Director’s Picks", style: .shelf, items: editorial))
+        }
+        result.append(contentsOf: genreHubs(
+            from: visible(interleaved(movieItems + ratedMovies, showItems + ratedShows)),
+            identityPrefix: "\(id):discover",
+            titleSuffix: "Movies & Shows",
+            maximum: 6
+        ))
         if !movieItems.isEmpty {
-            result.append(MediaHub(id: "\(id):recent-movies", providerID: id, title: "New Movies", style: .shelf, items: movieItems))
+            result.append(MediaHub(id: "\(id):recent-movies", providerID: id, title: "New Movies", style: .shelf, items: visible(movieItems)))
         }
         if !showItems.isEmpty {
-            result.append(MediaHub(id: "\(id):recent-shows", providerID: id, title: "New TV Shows", style: .shelf, items: showItems))
+            result.append(MediaHub(id: "\(id):recent-shows", providerID: id, title: "New TV Shows", style: .shelf, items: visible(showItems)))
         }
-        if !favorites.isEmpty {
-            result.append(MediaHub(id: "\(id):favorite-movies", providerID: id, title: "Favorite Movies", style: .shelf, items: favorites))
+        if !movieWatchlist.isEmpty {
+            result.append(MediaHub(id: "\(id):watchlist-movies", providerID: id, title: "Movie Watchlist", style: .shelf, items: visible(movieWatchlist)))
         }
-        if !ratedMovies.isEmpty {
-            result.append(MediaHub(id: "\(id):top-movies", providerID: id, title: "Top Rated Movies", style: .shelf, items: ratedMovies))
+        if !showWatchlist.isEmpty {
+            result.append(MediaHub(id: "\(id):watchlist-shows", providerID: id, title: "TV Watchlist", style: .shelf, items: visible(showWatchlist)))
+        }
+        let upcoming = visible(interleaved(upcomingMovieItems, upcomingShowItems))
+        if !upcoming.isEmpty {
+            result.append(MediaHub(id: "\(id):upcoming", providerID: id, title: "Coming Soon", style: .shelf, items: upcoming))
+        }
+        if !movieFavorites.isEmpty {
+            result.append(MediaHub(id: "\(id):favorite-movies", providerID: id, title: "Favorite Movies", style: .shelf, items: visible(movieFavorites)))
+        }
+        if !showFavorites.isEmpty {
+            result.append(MediaHub(id: "\(id):favorite-shows", providerID: id, title: "Favorite TV Shows", style: .shelf, items: visible(showFavorites)))
         }
         if !ratedShows.isEmpty {
-            result.append(MediaHub(id: "\(id):top-shows", providerID: id, title: "Top Rated TV Shows", style: .shelf, items: ratedShows))
+            result.append(MediaHub(id: "\(id):top-shows", providerID: id, title: "Critically Acclaimed TV", style: .shelf, items: visible(ratedShows)))
         }
-        return result
+        return uniqueAcrossHubs(result)
     }
 
     func hubs(in library: MediaLibrary) async throws -> [MediaHub] {
-        let page = try await items(in: library, sort: .addedAtDesc, page: Page(offset: 0, limit: 30))
-        guard !page.items.isEmpty else { return [] }
-        return [MediaHub(
-            id: "\(id):\(library.id):recent",
-            providerID: id,
-            title: "Recently Added",
-            style: .shelf,
-            items: page.items
-        )]
+        let catalogKind: JellyfinCatalogKind? = switch library.kind {
+        case .movies: .movies
+        case .shows: .shows
+        default: nil
+        }
+        guard let catalogKind else {
+            let page = try await items(in: library, sort: .addedAtDesc, page: Page(offset: 0, limit: 30))
+            return page.items.isEmpty ? [] : [MediaHub(
+                id: "\(id):\(library.id):recent", providerID: id,
+                title: "Recently Added", style: .shelf, items: page.items
+            )]
+        }
+
+        async let recent = optionalCatalog(
+            JellyfinCatalogQuery(kind: catalogKind, libraryID: library.id, sort: .addedAtDesc), limit: 30
+        )
+        async let top = optionalCatalog(
+            JellyfinCatalogQuery(kind: catalogKind, libraryID: library.id, sort: .ratingDesc), limit: 24
+        )
+        async let favorites = optionalCatalog(
+            JellyfinCatalogQuery(kind: catalogKind, libraryID: library.id, filter: .favorites, sort: .addedAtDesc), limit: 24
+        )
+        async let watchlist = optionalCatalog(
+            JellyfinCatalogQuery(kind: catalogKind, libraryID: library.id, filter: .watchlist, sort: .addedAtDesc), limit: 24
+        )
+        async let upcoming = optionalCatalog(
+            JellyfinCatalogQuery(kind: catalogKind, libraryID: library.id, filter: .upcoming, sort: .releaseDateDesc), limit: 24
+        )
+        async let recommendations = optionalRecommendations(
+            itemType: catalogKind == .movies ? "Movie" : "Series", mode: "personal", limit: 24
+        )
+        let (recentItems, topItems, favoriteItems, watchlistItems, upcomingItems, picks) = await (
+            recent, top, favorites, watchlist, upcoming, recommendations
+        )
+        var result = [
+            MediaHub(id: "\(id):\(library.id):picks", providerID: id, title: "Top Picks for You", style: .shelf, items: picks.items),
+        ]
+        result.append(contentsOf: genreHubs(
+            from: recentItems + topItems,
+            identityPrefix: "\(id):\(library.id):genre",
+            titleSuffix: catalogKind == .movies ? "Movies" : "TV Shows",
+            maximum: 6
+        ))
+        result += [
+            MediaHub(id: "\(id):\(library.id):recent", providerID: id, title: "Recently Added", style: .shelf, items: recentItems),
+            MediaHub(id: "\(id):\(library.id):top", providerID: id, title: "Popular Now", style: .shelf, items: topItems),
+            MediaHub(id: "\(id):\(library.id):watchlist", providerID: id, title: "Watchlist", style: .shelf, items: watchlistItems),
+            MediaHub(id: "\(id):\(library.id):favorites", providerID: id, title: "Favorites", style: .shelf, items: favoriteItems),
+            MediaHub(id: "\(id):\(library.id):upcoming", providerID: id, title: "Coming Soon", style: .shelf, items: upcomingItems)
+        ]
+        return uniqueAcrossHubs(result.filter { !$0.items.isEmpty })
     }
 
     // MARK: - Playback
@@ -615,6 +723,121 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
 
     private func optionalCatalog(_ request: JellyfinCatalogQuery, limit: Int) async -> [MediaItem] {
         (try? await catalog(request, page: Page(offset: 0, limit: limit)).items) ?? []
+    }
+
+    private func optionalRecommendations(
+        itemType: String,
+        mode: String,
+        limit: Int
+    ) async -> (title: String?, items: [MediaItem]) {
+        do {
+            let response: JellyfinRecommendationResponseDTO = try await transport.get(
+                "/plugins/liquidrecommendations/discover",
+                queryItems: [
+                    URLQueryItem(name: "itemType", value: itemType),
+                    URLQueryItem(name: "mode", value: mode),
+                    URLQueryItem(name: "limit", value: String(max(8, limit)))
+                ],
+                token: session.accessToken
+            )
+            let ids = response.items.map(\.id)
+            guard !ids.isEmpty else { return (response.title, []) }
+            var query = commonQueryItems
+            query += [
+                URLQueryItem(name: "Ids", value: ids.joined(separator: ",")),
+                URLQueryItem(name: "Recursive", value: "true"),
+                URLQueryItem(name: "IncludeItemTypes", value: itemType),
+                URLQueryItem(name: "Limit", value: String(ids.count))
+            ]
+            let resolved: JellyfinItemQueryResultDTO = try await transport.get(
+                "/Items", queryItems: query, token: session.accessToken
+            )
+            let byID = map(resolved.items).reduce(into: [String: MediaItem]()) {
+                $0[$1.ref.itemID.lowercased()] = $1
+            }
+            return (response.title, ids.compactMap { byID[$0.lowercased()] })
+        } catch {
+            // The native clients remain fully functional when the optional
+            // recommendations plugin is absent or temporarily unavailable.
+            return (nil, [])
+        }
+    }
+
+    private func interleaved(_ first: [MediaItem], _ second: [MediaItem]) -> [MediaItem] {
+        var values: [MediaItem] = []
+        for index in 0..<max(first.count, second.count) {
+            if first.indices.contains(index) { values.append(first[index]) }
+            if second.indices.contains(index) { values.append(second[index]) }
+        }
+        return values
+    }
+
+    private func dailyRotated(_ items: [MediaItem], limit: Int) -> [MediaItem] {
+        guard !items.isEmpty else { return [] }
+        let day = Calendar(identifier: .gregorian).ordinality(of: .day, in: .year, for: Date()) ?? 0
+        let offset = day % items.count
+        let rotated = Array(items[offset...]) + Array(items[..<offset])
+        return Array(rotated.prefix(max(1, limit)))
+    }
+
+    /// Builds useful genre rails from cards already fetched for the page. A
+    /// title is assigned to one preferred genre only, so the initial screen
+    /// exposes more unique artwork without another round trip to Jellyfin.
+    private func genreHubs(
+        from items: [MediaItem],
+        identityPrefix: String,
+        titleSuffix: String,
+        maximum: Int
+    ) -> [MediaHub] {
+        let priority = [
+            "Action", "Drama", "Comedy", "Crime", "Documentary", "Family",
+            "Animation", "Science Fiction", "Adventure", "Thriller", "Mystery"
+        ]
+        var groups: [String: [MediaItem]] = [:]
+        var canonicalNames: [String: String] = [:]
+        var seenItems = Set<MediaItemRef>()
+
+        for item in items where seenItems.insert(item.ref).inserted {
+            let values = item.genres ?? []
+            guard !values.isEmpty else { continue }
+            let genre = priority.compactMap { preferred in
+                values.first { $0.localizedCaseInsensitiveCompare(preferred) == .orderedSame }
+            }.first ?? values[0]
+            let key = genre.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            canonicalNames[key] = canonicalNames[key] ?? genre
+            groups[key, default: []].append(item)
+        }
+
+        let orderedKeys = groups.keys.sorted { lhs, rhs in
+            let leftName = canonicalNames[lhs] ?? lhs
+            let rightName = canonicalNames[rhs] ?? rhs
+            let leftRank = priority.firstIndex { $0.localizedCaseInsensitiveCompare(leftName) == .orderedSame }
+                ?? priority.count
+            let rightRank = priority.firstIndex { $0.localizedCaseInsensitiveCompare(rightName) == .orderedSame }
+                ?? priority.count
+            return leftRank == rightRank ? leftName < rightName : leftRank < rightRank
+        }
+
+        return orderedKeys.compactMap { key in
+            guard let values = groups[key], values.count >= 2 else { return nil }
+            let name = canonicalNames[key] ?? key
+            return MediaHub(
+                id: "\(identityPrefix):\(key)",
+                providerID: id,
+                title: "\(name) \(titleSuffix)",
+                style: .shelf,
+                items: Array(values.prefix(24))
+            )
+        }.prefix(max(0, maximum)).map { $0 }
+    }
+
+    private func uniqueAcrossHubs(_ hubs: [MediaHub]) -> [MediaHub] {
+        var seen = Set<MediaItemRef>()
+        return hubs.compactMap { hub in
+            let items = hub.items.filter { seen.insert($0.ref).inserted }
+            guard !items.isEmpty else { return nil }
+            return MediaHub(id: hub.id, providerID: hub.providerID, title: hub.title, style: hub.style, items: items)
+        }
     }
 
     private func watchlistCatalog(

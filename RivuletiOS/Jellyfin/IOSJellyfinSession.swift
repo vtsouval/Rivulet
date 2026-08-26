@@ -304,7 +304,11 @@ final class IOSJellyfinSession: ObservableObject {
         do {
             async let fetchedLibraries = provider.libraries()
             async let fetchedHubs = provider.hubs()
-            let (libraries, hubs) = try await (fetchedLibraries, fetchedHubs)
+            async let fetchedPreferences = provider.synchronizedPreferences()
+            let (libraries, hubs, preferences) = try await (
+                fetchedLibraries, fetchedHubs, fetchedPreferences
+            )
+            apply(preferences)
             self.libraries = libraries
             self.homeHubs = hubs
             state = .connected
@@ -467,6 +471,45 @@ final class IOSJellyfinSession: ObservableObject {
             try await provider.addToWatchlist(item.ref)
         } else {
             try await provider.removeFromWatchlist(item.ref)
+        }
+    }
+
+    func updateContentPreferences(_ patch: JellyfinContentPreferencesPatch) async throws {
+        guard let provider else { throw MediaProviderError.unauthorized }
+        apply(try await provider.updateContentPreferences(patch))
+        // Discovery shelves may include Anime or trailer-derived presentation;
+        // rebuild them immediately after a cross-client preference change.
+        homeHubs = try await provider.hubs()
+        saveSnapshot()
+    }
+
+    func updateMediaPreferences(_ patch: JellyfinMediaPreferencesPatch) async throws {
+        guard let provider else { throw MediaProviderError.unauthorized }
+        apply(try await provider.updateMediaPreferences(patch))
+    }
+
+    private func apply(_ preferences: JellyfinSynchronizedPreferences) {
+        JellyfinPlaybackPreferences.applyToLocalDefaults(preferences)
+        let defaults = UserDefaults.standard
+        let suffix = userName ?? "default"
+        if let code = preferences.defaultLiveTVCountry,
+           let country = Self.liveTVCountryName(for: code) {
+            defaults.set(country, forKey: "ios.liveTV.country.\(suffix)")
+        }
+        if let code = preferences.preferredSportsCountry,
+           let country = Self.liveTVCountryName(for: code) {
+            defaults.set(country, forKey: "ios.liveTV.sportsCountry.\(suffix)")
+        }
+    }
+
+    private static func liveTVCountryName(for code: String) -> String? {
+        switch code.uppercased() {
+        case "ALL": return "All"
+        case "GR": return "Greece"
+        case "NL": return "Netherlands"
+        case "AU": return "Australia"
+        case "KR": return "Korea"
+        default: return nil
         }
     }
 

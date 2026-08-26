@@ -300,17 +300,22 @@ final class ProviderBrowseViewController: UIViewController {
         guard let provider else { return }
         let page = Page(offset: 0, limit: 60)
         if !forceRefresh,
-           let cached = await ProviderBrowseCache.shared.libraryPage(
-                providerID: providerID, libraryID: library.id, sort: .addedAtDesc, page: page) {
-            applyLibrary(cached, library: library, replacing: true)
+           let cachedPage = await ProviderBrowseCache.shared.libraryPage(
+                providerID: providerID, libraryID: library.id, sort: .addedAtDesc, page: page),
+           let cachedHubs = await ProviderBrowseCache.shared.hubs(
+                providerID: providerID, libraryID: library.id) {
+            applyLibrary(cachedPage, hubs: cachedHubs, library: library, replacing: true)
             return
         }
         do {
-            let result = try await provider.items(in: library, sort: .addedAtDesc, page: page)
+            async let pageRequest = provider.items(in: library, sort: .addedAtDesc, page: page)
+            async let hubRequest = provider.hubs(in: library)
+            let (result, hubs) = try await (pageRequest, hubRequest)
             guard !Task.isCancelled else { return }
             await ProviderBrowseCache.shared.storeLibraryPage(
                 result, providerID: providerID, libraryID: library.id, sort: .addedAtDesc, page: page)
-            applyLibrary(result, library: library, replacing: true)
+            await ProviderBrowseCache.shared.storeHubs(hubs, providerID: providerID, libraryID: library.id)
+            applyLibrary(result, hubs: hubs, library: library, replacing: true)
         } catch {
             guard !Task.isCancelled else { return }
             showError(error.localizedDescription)
@@ -320,7 +325,11 @@ final class ProviderBrowseViewController: UIViewController {
     private func loadNextLibraryPageIfNeeded(near itemIndex: Int) {
         guard case .library(let library) = mode,
               !loadingNextPage,
-              var section = sections.first,
+              let gridIndex = sections.firstIndex(where: {
+                  if case .grid = $0.presentation { return true }
+                  return false
+              }),
+              var section = sections[safe: gridIndex],
               itemIndex >= max(0, section.items.count - 12),
               let page = section.nextPage,
               let provider
@@ -339,18 +348,18 @@ final class ProviderBrowseViewController: UIViewController {
                     await ProviderBrowseCache.shared.storeLibraryPage(
                         result, providerID: providerID, libraryID: library.id, sort: .addedAtDesc, page: page)
                 }
-                guard !Task.isCancelled, !sections.isEmpty else { return }
+                guard !Task.isCancelled, sections.indices.contains(gridIndex) else { return }
                 let oldCount = section.items.count
                 let known = Set(section.items.map(\.ref))
                 let additions = result.items.filter { !known.contains($0.ref) }
                 section.items.append(contentsOf: additions)
                 section.total = result.total
                 section.nextPage = result.nextPage
-                sections[0] = section
+                sections[gridIndex] = section
                 if !additions.isEmpty {
                     collectionView.performBatchUpdates {
                         collectionView.insertItems(at: (oldCount..<section.items.count).map {
-                            IndexPath(item: $0, section: 0)
+                            IndexPath(item: $0, section: gridIndex)
                         })
                     }
                     warmArtwork(for: additions)
@@ -378,17 +387,32 @@ final class ProviderBrowseViewController: UIViewController {
         applyLoadedContent(emptyTitle: "Your home is ready", emptyMessage: "New and unfinished titles will appear here.")
     }
 
-    private func applyLibrary(_ result: PagedResult<MediaItem>, library: MediaLibrary, replacing: Bool) {
+    private func applyLibrary(
+        _ result: PagedResult<MediaItem>,
+        hubs: [MediaHub],
+        library: MediaLibrary,
+        replacing: Bool
+    ) {
         let items = unique(result.items)
         if replacing || sections.isEmpty {
-            sections = [Section(
+            sections = hubs.filter { !$0.items.isEmpty }.map { hub in
+                Section(
+                    id: hub.id,
+                    title: hub.title,
+                    presentation: .shelf(continueWatching: isContinueWatching(hub)),
+                    items: unique(hub.items),
+                    total: hub.items.count,
+                    nextPage: nil
+                )
+            }
+            sections.append(Section(
                 id: "library:\(library.id)",
-                title: library.title,
+                title: "All \(library.title)",
                 presentation: .grid,
                 items: items,
                 total: result.total,
                 nextPage: result.nextPage
-            )]
+            ))
         }
         applyLoadedContent(emptyTitle: "No titles", emptyMessage: "This library does not contain any supported videos yet.")
     }

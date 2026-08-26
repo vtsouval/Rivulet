@@ -88,6 +88,8 @@ nonisolated enum JellyfinCatalogMapper {
             releaseDate: normalized(dto.premiereDate),
             contentRating: normalized(dto.officialRating),
             runtime: seconds(fromTicks: dto.runTimeTicks),
+            genres: normalizedValues(dto.genres),
+            tags: normalizedValues(dto.tags),
             isMusic: dto.mediaType?.caseInsensitiveCompare("Audio") == .orderedSame,
             parentRef: context.ref(for: parentID),
             grandparentRef: context.ref(for: grandparentID),

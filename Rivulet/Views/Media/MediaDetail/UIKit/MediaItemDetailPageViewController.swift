@@ -18,6 +18,7 @@
 //  Below-fold info columns (3b) and the custom blur-fade (3c) land next.
 //
 
+import AVFoundation
 import Combine
 import UIKit
 
@@ -41,6 +42,23 @@ private final class ScrimGradientView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
+/// Full-bleed native trailer canvas. tvOS can autoplay direct media URLs but
+/// intentionally leaves webpage trailers (for example YouTube watch pages) to
+/// the explicit Trailers row because the platform has no WebKit iframe player.
+private final class NativeTrailerBackdropView: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        playerLayer.videoGravity = .resizeAspectFill
+        backgroundColor = .black
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+}
+
 final class MediaItemDetailPageViewController: UIViewController {
 
     /// Mutable so a post-playback refresh can swap in the re-fetched copy
@@ -49,6 +67,7 @@ final class MediaItemDetailPageViewController: UIViewController {
     private let onPlay: (MediaItem) -> Void
 
     private let backdrop = UIImageView()
+    private let trailerBackdrop = NativeTrailerBackdropView()
     private let scrim = ScrimGradientView()
     private let textColumn = UIStackView()
 
@@ -77,7 +96,13 @@ final class MediaItemDetailPageViewController: UIViewController {
     private weak var playTitleLabel: UILabel?
     private weak var watchedButton: FocusableActionButton?
     private weak var watchlistButton: FocusableActionButton?
+    private weak var trailerPauseButton: FocusableActionButton?
+    private weak var trailerMuteButton: FocusableActionButton?
     private var onWatchlist = false
+    private var trailerPlayer: AVPlayer?
+    private var trailerEndObserver: NSObjectProtocol?
+    private var trailerAttempted = false
+    private var trailerIsPaused = false
 
     private var isWatched: Bool
     private let blurFade = BlurFadeTransitioningDelegate()
@@ -107,6 +132,9 @@ final class MediaItemDetailPageViewController: UIViewController {
         backdrop.contentMode = .scaleAspectFill
         backdrop.clipsToBounds = true
         view.addSubview(backdrop)
+        trailerBackdrop.translatesAutoresizingMaskIntoConstraints = false
+        trailerBackdrop.alpha = 0
+        view.addSubview(trailerBackdrop)
 
         // Transparent scroll view (driven by Down/Up, not the focus engine).
         scrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -130,6 +158,11 @@ final class MediaItemDetailPageViewController: UIViewController {
             backdrop.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             backdrop.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             backdrop.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            trailerBackdrop.topAnchor.constraint(equalTo: view.topAnchor),
+            trailerBackdrop.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            trailerBackdrop.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            trailerBackdrop.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
             scrollView.topAnchor.constraint(equalTo: view.topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -215,6 +248,11 @@ final class MediaItemDetailPageViewController: UIViewController {
         super.viewDidAppear(animated)
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        stopTrailer()
     }
 
     @objc private func dismissSelf() { dismiss(animated: true) }
@@ -398,7 +436,17 @@ final class MediaItemDetailPageViewController: UIViewController {
             await MainActor.run { self?.onWatchlist = on; self?.updateWatchlistIcon() }
         }
 
-        let row = UIStackView(arrangedSubviews: [pill, watched, watchlist])
+        let pauseTrailer = circleButton(systemImage: "pause.fill")
+        pauseTrailer.isHidden = true
+        pauseTrailer.onPrimaryAction = { [weak self] in self?.toggleTrailerPause() }
+        trailerPauseButton = pauseTrailer
+
+        let muteTrailer = circleButton(systemImage: "speaker.slash.fill")
+        muteTrailer.isHidden = true
+        muteTrailer.onPrimaryAction = { [weak self] in self?.toggleTrailerMute() }
+        trailerMuteButton = muteTrailer
+
+        let row = UIStackView(arrangedSubviews: [pill, watched, watchlist, pauseTrailer, muteTrailer])
         row.axis = .horizontal
         row.spacing = 18
         row.alignment = .center
@@ -508,8 +556,8 @@ final class MediaItemDetailPageViewController: UIViewController {
         guard let overview = item.overview, !overview.isEmpty else { return nil }
         let body = NSMutableAttributedString()
         let color = UIColor.white.withAlphaComponent(0.9)
-        if let s = item.seasonNumber, let e = item.episodeNumber {
-            body.append(NSAttributedString(string: "S\(s), E\(e): ", attributes: [
+        if let coordinate = item.episodeCoordinate {
+            body.append(NSAttributedString(string: "\(coordinate): ", attributes: [
                 .font: UIFont.systemFont(ofSize: 24, weight: .bold), .foregroundColor: color]))
         }
         body.append(NSAttributedString(string: overview, attributes: [
@@ -574,6 +622,74 @@ final class MediaItemDetailPageViewController: UIViewController {
                 .trimmingCharacters(in: .whitespaces)
             if !text.isEmpty { badgeRow.addArrangedSubview(Self.badge(text)) }
         }
+        startTrailerIfPossible(detail.trailerURL)
+    }
+
+    private func startTrailerIfPossible(_ url: URL?) {
+        guard !trailerAttempted else { return }
+        trailerAttempted = true
+        guard UserDefaults.standard.object(forKey: "ios.autoplayTrailers") as? Bool ?? true,
+              let url,
+              Self.isDirectTrailerURL(url) else { return }
+
+        let player = AVPlayer(url: url)
+        player.isMuted = UserDefaults.standard.object(forKey: "ios.trailerMuted") as? Bool ?? true
+        trailerPlayer = player
+        trailerBackdrop.playerLayer.player = player
+        trailerPauseButton?.isHidden = false
+        trailerMuteButton?.isHidden = false
+        updateTrailerControlIcons()
+        trailerEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: player.currentItem,
+            queue: .main
+        ) { [weak self] _ in self?.stopTrailer() }
+        player.play()
+        UIView.animate(withDuration: 0.65) { self.trailerBackdrop.alpha = 1 }
+    }
+
+    private func toggleTrailerPause() {
+        guard let trailerPlayer else { return }
+        trailerIsPaused.toggle()
+        trailerIsPaused ? trailerPlayer.pause() : trailerPlayer.play()
+        updateTrailerControlIcons()
+    }
+
+    private func toggleTrailerMute() {
+        guard let trailerPlayer else { return }
+        trailerPlayer.isMuted.toggle()
+        UserDefaults.standard.set(trailerPlayer.isMuted, forKey: "ios.trailerMuted")
+        updateTrailerControlIcons()
+    }
+
+    private func updateTrailerControlIcons() {
+        setCircleIcon(trailerPauseButton, trailerIsPaused ? "play.fill" : "pause.fill")
+        setCircleIcon(
+            trailerMuteButton,
+            trailerPlayer?.isMuted == true ? "speaker.slash.fill" : "speaker.wave.2.fill"
+        )
+    }
+
+    private func stopTrailer() {
+        if let trailerEndObserver {
+            NotificationCenter.default.removeObserver(trailerEndObserver)
+            self.trailerEndObserver = nil
+        }
+        trailerPlayer?.pause()
+        trailerBackdrop.playerLayer.player = nil
+        trailerPlayer = nil
+        trailerPauseButton?.isHidden = true
+        trailerMuteButton?.isHidden = true
+        trailerIsPaused = false
+        UIView.animate(withDuration: 0.35) { self.trailerBackdrop.alpha = 0 }
+    }
+
+    private static func isDirectTrailerURL(_ url: URL) -> Bool {
+        let host = (url.host ?? "").lowercased()
+        guard !host.contains("youtube.com"), host != "youtu.be", !host.contains("vimeo.com") else {
+            return false
+        }
+        return ["m3u8", "mp4", "mov", "m4v", "ts"].contains(url.pathExtension.lowercased())
     }
 
     // MARK: - Watch-state refresh (issue #228)

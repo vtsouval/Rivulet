@@ -2,6 +2,7 @@
 // Copyright (C) 2025-2026 Bain Gurley
 
 import SwiftUI
+import WebKit
 
 struct IOSJellyfinDetailView: View {
     let item: MediaItem
@@ -16,6 +17,10 @@ struct IOSJellyfinDetailView: View {
     @State private var error: String?
     @State private var isFavorite: Bool
     @State private var isOnWatchlist = false
+    @State private var trailerPaused = false
+    @State private var detailIsVisible = true
+    @AppStorage("ios.autoplayTrailers") private var autoplayTrailers = true
+    @AppStorage("ios.trailerMuted") private var trailerMuted = true
 
     init(item: MediaItem) {
         self.item = item
@@ -54,6 +59,8 @@ struct IOSJellyfinDetailView: View {
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(for: MediaItem.self) { IOSJellyfinDetailView(item: $0) }
         .task { await load() }
+        .onAppear { detailIsVisible = true }
+        .onDisappear { detailIsVisible = false }
         .fullScreenCover(item: $playback) { IOSJellyfinPlayerView(context: $0) }
         .preferredColorScheme(.dark)
     }
@@ -67,6 +74,18 @@ struct IOSJellyfinDetailView: View {
             }
             .frame(width: size.width, height: landscape ? size.width * 0.53 : size.height * 0.57)
             .clipped()
+
+            if detailIsVisible, autoplayTrailers, let trailerURL = detail?.trailerURL {
+                IOSJellyfinTrailerView(
+                    url: trailerURL,
+                    isMuted: trailerMuted,
+                    isPaused: trailerPaused
+                )
+                .frame(width: size.width, height: landscape ? size.width * 0.53 : size.height * 0.57)
+                .clipped()
+                .transition(.opacity.animation(.easeInOut(duration: 0.65)))
+                .allowsHitTesting(false)
+            }
 
             LinearGradient(
                 stops: [.init(color: .clear, location: 0.25), .init(color: .black.opacity(0.96), location: 1)],
@@ -98,6 +117,25 @@ struct IOSJellyfinDetailView: View {
             }
             .padding(.horizontal, landscape ? 48 : 22)
             .padding(.bottom, 24)
+
+            if autoplayTrailers, detail?.trailerURL != nil {
+                HStack(spacing: 8) {
+                    Button { trailerPaused.toggle() } label: {
+                        Image(systemName: trailerPaused ? "play.fill" : "pause.fill")
+                            .frame(width: 40, height: 40)
+                    }
+                    Button { trailerMuted.toggle() } label: {
+                        Image(systemName: trailerMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .frame(width: 40, height: 40)
+                    }
+                }
+                .buttonStyle(.plain)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay { Capsule().stroke(.white.opacity(0.14)) }
+                .padding(.trailing, 20)
+                .padding(.bottom, 22)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            }
         }
         .frame(height: landscape ? size.width * 0.53 : size.height * 0.57)
     }
@@ -238,7 +276,15 @@ struct IOSJellyfinDetailView: View {
         var seen = Set<String>()
         return (detail.cast + detail.directors + detail.writers).filter { seen.insert($0.id).inserted }
     }
-    private var seasons: [Int] { Array(Set(episodes.compactMap(\.seasonNumber))).sorted() }
+    private var seasons: [Int] {
+        // Main seasons are the primary path; genuine specials remain available
+        // at the end rather than appearing as a misleading first "Season 0".
+        Array(Set(episodes.compactMap(\.seasonNumber))).sorted {
+            if $0 == 0 { return false }
+            if $1 == 0 { return true }
+            return $0 < $1
+        }
+    }
     private var filteredEpisodes: [MediaItem] {
         let matching = episodes.filter { ($0.seasonNumber ?? selectedSeason) == selectedSeason }
         return EpisodePicker.inPlaybackOrder(matching)
@@ -333,6 +379,82 @@ struct IOSJellyfinDetailView: View {
     }
 }
 
+/// A deliberately non-interactive trailer stage. YouTube's chrome is removed,
+/// playback never loops, and the only controls are the native Liquid Glass
+/// pause/mute pair rendered by the detail page.
+private struct IOSJellyfinTrailerView: UIViewRepresentable {
+    let url: URL
+    let isMuted: Bool
+    let isPaused: Bool
+
+    func makeUIView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.allowsInlineMediaPlayback = true
+        configuration.mediaTypesRequiringUserActionForPlayback = []
+        let view = WKWebView(frame: .zero, configuration: configuration)
+        view.isOpaque = false
+        view.backgroundColor = .clear
+        view.scrollView.isScrollEnabled = false
+        view.scrollView.contentInsetAdjustmentBehavior = .never
+        view.loadHTMLString(Self.document(for: url, muted: isMuted), baseURL: url)
+        return view
+    }
+
+    func updateUIView(_ view: WKWebView, context: Context) {
+        let muteCommand = isMuted
+            ? "if(window.rivuletMute){window.rivuletMute();}"
+            : "if(window.rivuletUnmute){window.rivuletUnmute();}"
+        let playCommand = isPaused
+            ? "if(window.rivuletPause){window.rivuletPause();}"
+            : "if(window.rivuletPlay){window.rivuletPlay();}"
+        view.evaluateJavaScript(muteCommand)
+        view.evaluateJavaScript(playCommand)
+    }
+
+    static func dismantleUIView(_ view: WKWebView, coordinator: Void) {
+        view.evaluateJavaScript("if(window.rivuletStop){window.rivuletStop();}")
+        view.stopLoading()
+        view.loadHTMLString("", baseURL: nil)
+    }
+
+    private static func document(for url: URL, muted: Bool) -> String {
+        let escaped = url.absoluteString
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+        if let videoID = youtubeID(from: url) {
+            return """
+            <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+            <style>*{box-sizing:border-box}html,body,#player{margin:0;width:100%;height:100%;overflow:hidden;background:#000}iframe{width:100%;height:100%;border:0;pointer-events:none}</style></head>
+            <body><div id="player"></div><script src="https://www.youtube.com/iframe_api"></script><script>
+            var player; function onYouTubeIframeAPIReady(){player=new YT.Player('player',{videoId:'\(videoID)',playerVars:{autoplay:1,controls:0,disablekb:1,fs:0,iv_load_policy:3,modestbranding:1,playsinline:1,rel:0},events:{onReady:function(e){\(muted ? "e.target.mute();" : "e.target.unMute();")e.target.playVideo();},onStateChange:function(e){if(e.data===YT.PlayerState.ENDED){e.target.stopVideo();}}}});}
+            window.rivuletMute=function(){if(player&&player.mute)player.mute()}; window.rivuletUnmute=function(){if(player&&player.unMute)player.unMute()};
+            window.rivuletPause=function(){if(player&&player.pauseVideo)player.pauseVideo()}; window.rivuletPlay=function(){if(player&&player.playVideo)player.playVideo()};
+            window.rivuletStop=function(){if(player&&player.stopVideo)player.stopVideo()};
+            </script></body></html>
+            """
+        }
+        return """
+        <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+        <style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000;object-fit:cover}</style></head><body>
+        <video id="player" src="\(escaped)" autoplay playsinline \(muted ? "muted" : "")></video><script>
+        var player=document.getElementById('player'); window.rivuletMute=function(){player.muted=true}; window.rivuletUnmute=function(){player.muted=false};
+        window.rivuletPause=function(){player.pause()}; window.rivuletPlay=function(){player.play()}; window.rivuletStop=function(){player.pause();player.removeAttribute('src');player.load()};
+        </script></body></html>
+        """
+    }
+
+    private static func youtubeID(from url: URL) -> String? {
+        let host = (url.host ?? "").lowercased()
+        if host == "youtu.be" { return url.pathComponents.dropFirst().first }
+        guard host.contains("youtube.com") else { return nil }
+        if let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "v" })?.value { return id }
+        if let index = url.pathComponents.firstIndex(of: "embed"),
+           url.pathComponents.indices.contains(index + 1) { return url.pathComponents[index + 1] }
+        return nil
+    }
+}
+
 private struct IOSJellyfinMetadataRow: View {
     let title: String
     let values: [String]
@@ -408,8 +530,8 @@ struct IOSJellyfinDetailShelf: View {
                                     if case .success(let image) = phase { image.resizable().scaledToFill() }
                                     else { Color.white.opacity(0.06) }
                                 }
-                                .frame(width: 138, height: 207).clipShape(RoundedRectangle(cornerRadius: 15))
-                                Text(item.title).font(.subheadline.weight(.semibold)).lineLimit(2).frame(width: 138, alignment: .leading)
+                                .frame(width: 164, height: 246).clipShape(RoundedRectangle(cornerRadius: 17))
+                                Text(item.title).font(.subheadline.weight(.semibold)).lineLimit(2).frame(width: 164, alignment: .leading)
                             }
                         }
                         .buttonStyle(.plain)

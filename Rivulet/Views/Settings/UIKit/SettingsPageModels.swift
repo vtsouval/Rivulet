@@ -251,6 +251,13 @@ enum SettingsContent {
             toggle("personalizedRecs", "Personalized Recommendations", key: "enablePersonalizedRecommendations", default: false)
         ]
         rows += [
+            .header("Content"),
+            synchronizedToggle("showAnime", "Show Anime", key: "ios.showAnime", default: true) { value in
+                .content(.init(animeEnabled: value))
+            },
+            synchronizedToggle("blurEpisodeSpoilers", "Hide Episode Spoilers", key: "ios.blurEpisodeSpoilers", default: true) { value in
+                .media(.init(hideEpisodeSpoilers: value))
+            },
             .header("Library"),
             toggle("libraryHero", "Hero", key: "showLibraryHero", default: true),
             toggle("discoveryRows", "Discovery Rows", key: "showLibraryRecommendations", default: true),
@@ -273,6 +280,15 @@ enum SettingsContent {
 
     private static var playback: [SettingsRowItem] {
         [
+            synchronizedToggle("autoplayTrailers", "Auto-Play Trailers", key: "ios.autoplayTrailers", default: true) { value in
+                .both(
+                    content: .init(trailerPreviewsEnabled: value),
+                    media: .init(trailerAutoplay: value)
+                )
+            },
+            synchronizedToggle("trailerMuted", "Start Trailers Muted", key: "ios.trailerMuted", default: true) { value in
+                .media(.init(trailerMuted: value))
+            },
             toggle("autoSkipIntro", "Auto-Skip Intro", key: "autoSkipIntro", default: false),
             toggle("autoSkipCredits", "Auto-Skip Credits", key: "autoSkipCredits", default: false),
             toggle("autoSkipAds", "Auto-Skip Ads", key: "autoSkipAds", default: false),
@@ -831,5 +847,39 @@ enum SettingsContent {
             get: { SettingsStore.bool(key, default: def) },
             set: { SettingsStore.setBool(key, $0) }
         ), isEnabled: enabledWhen ?? { true })
+    }
+
+    private enum JellyfinPreferenceMutation {
+        case content(JellyfinContentPreferencesPatch)
+        case media(JellyfinMediaPreferencesPatch)
+        case both(content: JellyfinContentPreferencesPatch, media: JellyfinMediaPreferencesPatch)
+    }
+
+    private static func synchronizedToggle(
+        _ id: String,
+        _ title: String,
+        key: String,
+        default def: Bool,
+        mutation: @escaping (Bool) -> JellyfinPreferenceMutation
+    ) -> SettingsRowItem {
+        SettingsRowItem(id: id, title: title, kind: .toggle(
+            get: { SettingsStore.bool(key, default: def) },
+            set: { value in
+                SettingsStore.setBool(key, value)
+                guard let provider = MediaProviderRegistry.shared.enabledProviders()
+                    .compactMap({ $0 as? JellyfinProvider }).first else { return }
+                Task {
+                    switch mutation(value) {
+                    case .content(let patch):
+                        _ = try? await provider.updateContentPreferences(patch)
+                    case .media(let patch):
+                        _ = try? await provider.updateMediaPreferences(patch)
+                    case .both(let content, let media):
+                        _ = try? await provider.updateContentPreferences(content)
+                        _ = try? await provider.updateMediaPreferences(media)
+                    }
+                }
+            }
+        ))
     }
 }

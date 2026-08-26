@@ -185,6 +185,7 @@ private struct IOSJellyfinPasskeyEnrollmentView: View {
 }
 
 struct IOSJellyfinPlaybackSettingsView: View {
+    @EnvironmentObject private var jellyfin: IOSJellyfinSession
     @AppStorage(JellyfinPlaybackPreferences.qualityKey) private var quality = JellyfinPlaybackQuality.auto.rawValue
     @AppStorage("ios.preferredAudioLanguage") private var audioLanguage = "eng"
     @AppStorage("ios.preferredSubtitleLanguage") private var subtitleLanguage = "eng"
@@ -192,6 +193,7 @@ struct IOSJellyfinPlaybackSettingsView: View {
     @AppStorage("playerSkipBackwardSeconds") private var skipBackwardSeconds = 10
     @AppStorage("playerSkipForwardSeconds") private var skipForwardSeconds = 30
     @AppStorage("ios.autoplayTrailers") private var autoplayTrailers = true
+    @AppStorage("ios.trailerMuted") private var trailerMuted = true
     @AppStorage("ios.showSkipIntro") private var showSkipIntro = true
     @AppStorage("ios.showSkipCredits") private var showSkipCredits = true
     @AppStorage("ios.cellularQuality") private var cellularQuality = "720p"
@@ -212,6 +214,7 @@ struct IOSJellyfinPlaybackSettingsView: View {
                 }
                 Toggle("Auto-play next episode", isOn: $autoplayNextEpisode)
                 Toggle("Auto-play trailers", isOn: $autoplayTrailers)
+                Toggle("Start trailers muted", isOn: $trailerMuted)
             }
             Section("Languages") {
                 Picker("Audio", selection: $audioLanguage) { languageOptions }
@@ -228,6 +231,24 @@ struct IOSJellyfinPlaybackSettingsView: View {
             }
         }
         .navigationTitle("Playback")
+        .onChange(of: quality) { _, value in
+            Task { try? await jellyfin.updateMediaPreferences(.init(preferredResolution: serverResolution(value))) }
+        }
+        .onChange(of: audioLanguage) { _, value in
+            Task { try? await jellyfin.updateMediaPreferences(.init(audioLanguage: value)) }
+        }
+        .onChange(of: subtitleLanguage) { _, value in
+            Task { try? await jellyfin.updateMediaPreferences(.init(subtitleLanguage: value == "off" ? "none" : value)) }
+        }
+        .onChange(of: autoplayTrailers) { _, value in
+            Task {
+                try? await jellyfin.updateContentPreferences(.init(trailerPreviewsEnabled: value))
+                try? await jellyfin.updateMediaPreferences(.init(trailerAutoplay: value))
+            }
+        }
+        .onChange(of: trailerMuted) { _, value in
+            Task { try? await jellyfin.updateMediaPreferences(.init(trailerMuted: value)) }
+        }
     }
 
     @ViewBuilder private var languageOptions: some View {
@@ -238,6 +259,10 @@ struct IOSJellyfinPlaybackSettingsView: View {
         Text("German").tag("deu")
         Text("Spanish").tag("spa")
         Text("French").tag("fra")
+    }
+
+    private func serverResolution(_ value: String) -> String {
+        value == "auto" ? "auto" : "\(value)p"
     }
 }
 
@@ -275,14 +300,31 @@ struct IOSJellyfinLiveTVSettingsView: View {
         }
         .onChange(of: defaultCountry) { _, value in
             UserDefaults.standard.set(value, forKey: "ios.liveTV.country.\(jellyfin.userName ?? "default")")
+            Task {
+                try? await jellyfin.updateContentPreferences(.init(defaultLiveTVCountry: serverCountry(value)))
+            }
         }
         .onChange(of: sportsCountry) { _, value in
             UserDefaults.standard.set(value, forKey: "ios.liveTV.sportsCountry.\(jellyfin.userName ?? "default")")
+            Task {
+                try? await jellyfin.updateContentPreferences(.init(preferredSportsCountry: serverCountry(value)))
+            }
+        }
+    }
+
+    private func serverCountry(_ value: String) -> String {
+        switch value {
+        case "Netherlands": return "NL"
+        case "Australia": return "AU"
+        case "Korea": return "KR"
+        case "All": return "ALL"
+        default: return "GR"
         }
     }
 }
 
 struct IOSJellyfinAppearanceSettingsView: View {
+    @EnvironmentObject private var jellyfin: IOSJellyfinSession
     @AppStorage("ios.showAnime") private var showAnime = true
     @AppStorage("ios.blurEpisodeSpoilers") private var blurSpoilers = true
     @AppStorage("ios.posterDensity") private var posterDensity = "comfortable"
@@ -304,6 +346,12 @@ struct IOSJellyfinAppearanceSettingsView: View {
             }
         }
         .navigationTitle("Discovery & Appearance")
+        .onChange(of: showAnime) { _, value in
+            Task { try? await jellyfin.updateContentPreferences(.init(animeEnabled: value)) }
+        }
+        .onChange(of: blurSpoilers) { _, value in
+            Task { try? await jellyfin.updateMediaPreferences(.init(hideEpisodeSpoilers: value)) }
+        }
     }
 }
 

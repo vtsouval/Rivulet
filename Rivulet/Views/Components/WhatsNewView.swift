@@ -140,6 +140,15 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.6.0 (82)", [
+            "Jellyfin Season 0 is now presented as Specials across iPhone, iPad, Mac and Apple TV",
+            "Home, Discover, Movies and TV Shows now include native Top Picks, Director’s Picks, genre rails, watchlists, favorites and Coming Soon shelves",
+            "Movies and TV Shows use larger adaptive artwork with fast cached catalog pages and progressive loading",
+            "Movie and show detail pages add an integrated one-shot trailer stage with native pause and mute controls",
+            "Trailer autoplay, trailer mute, Anime visibility, spoiler protection, quality, audio and subtitle preferences synchronize per Jellyfin user with the web app",
+            "TV episodes show their series, season or Specials label, episode title, progress and watched state consistently",
+            "Jellyfin recommendations are resolved in server order and deduplicated across the first visible shelves",
+        ]),
         ("1.5.0 (81)", [
             "TV episodes now consistently show the series name, season title, episode title and Apple-style season/episode position",
             "Show pages open on the next unfinished season and expose Resume or Play for the correct episode",

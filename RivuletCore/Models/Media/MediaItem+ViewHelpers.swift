@@ -50,7 +50,7 @@ extension MediaItem {
         guard kind == .episode,
               let s = seasonNumber,
               let e = episodeNumber else { return nil }
-        return "S\(String(format: "%02d", s))E\(String(format: "%02d", e))"
+        return s == 0 ? "Special \(e)" : "S\(String(format: "%02d", s))E\(String(format: "%02d", e))"
     }
 
     /// Apple-style compact episode coordinates used in native detail and
@@ -59,7 +59,7 @@ extension MediaItem {
     var episodeCoordinate: String? {
         guard kind == .episode else { return nil }
         switch (seasonNumber, episodeNumber) {
-        case let (season?, episode?): return "S\(season), E\(episode)"
+        case let (season?, episode?): return season == 0 ? "Special \(episode)" : "S\(season), E\(episode)"
         case let (season?, nil): return season == 0 ? "Specials" : "Season \(season)"
         case let (nil, episode?): return "Episode \(episode)"
         case (nil, nil): return nil
@@ -83,12 +83,28 @@ extension MediaItem {
     /// Season label that prefers the server's editorial name but falls back
     /// to a stable native label.
     var seasonDisplayTitle: String? {
+        // Jellyfin represents specials as index zero and some metadata agents
+        // literally return "Season 0". The native UI should always use the
+        // human label regardless of that server-side title.
+        if seasonNumber == 0 { return "Specials" }
         if let seasonTitle = seasonTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
            !seasonTitle.isEmpty {
             return seasonTitle
         }
         guard let seasonNumber else { return nil }
         return seasonNumber == 0 ? "Specials" : "Season \(seasonNumber)"
+    }
+
+    /// Conservative Anime classification. Generic animation is intentionally
+    /// not treated as Anime, so family films and western animation stay visible.
+    var isAnime: Bool {
+        let markers = (genres ?? []) + (tags ?? [])
+        return markers.contains { value in
+            switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "anime", "manga", "japanese animation", "anidb", "myanimelist": return true
+            default: return false
+            }
+        }
     }
 }
 

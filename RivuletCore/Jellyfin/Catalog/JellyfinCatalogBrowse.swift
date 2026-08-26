@@ -32,6 +32,7 @@ enum JellyfinCatalogFilter: String, CaseIterable, Codable, Hashable, Sendable, I
     case favorites
     case watchlist
     case unwatched
+    case upcoming
 
     var id: String { rawValue }
 
@@ -41,6 +42,7 @@ enum JellyfinCatalogFilter: String, CaseIterable, Codable, Hashable, Sendable, I
         case .favorites: "Favorites"
         case .watchlist: "Watchlist"
         case .unwatched: "Unwatched"
+        case .upcoming: "Upcoming"
         }
     }
 
@@ -50,6 +52,7 @@ enum JellyfinCatalogFilter: String, CaseIterable, Codable, Hashable, Sendable, I
         case .favorites: "heart.fill"
         case .watchlist: "bookmark.fill"
         case .unwatched: "circle"
+        case .upcoming: "calendar.badge.clock"
         }
     }
 }

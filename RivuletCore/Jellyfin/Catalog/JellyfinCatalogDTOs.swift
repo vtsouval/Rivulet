@@ -246,6 +246,33 @@ nonisolated struct JellyfinItemQueryResultDTO: Decodable, Hashable, Sendable {
     }
 }
 
+/// Response from the installed Liquid Recommendations plugin. IDs are kept as
+/// strings because Jellyfin item identity is opaque to the client even when a
+/// plugin currently serializes it as a GUID.
+nonisolated struct JellyfinRecommendationResponseDTO: Decodable, Hashable, Sendable {
+    let items: [JellyfinRecommendationEntryDTO]
+    let title: String?
+    let strategy: String?
+
+    enum CodingKeys: String, CodingKey {
+        case items = "Items"
+        case title = "Title"
+        case strategy = "Strategy"
+    }
+}
+
+nonisolated struct JellyfinRecommendationEntryDTO: Decodable, Hashable, Sendable {
+    let id: String
+    let score: Double?
+    let reason: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id = "Id"
+        case score = "Score"
+        case reason = "Reason"
+    }
+}
+
 /// Value-typed continuation metadata so providers do not reproduce pagination
 /// edge cases independently.
 nonisolated struct JellyfinContinuationDTO: Hashable, Sendable {

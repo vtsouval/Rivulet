@@ -60,4 +60,46 @@ final class MediaItemTests: XCTestCase {
         XCTAssertEqual(item.episodeHierarchyTitle, "Northern Lights  ·  S2, E3")
         XCTAssertEqual(item.seasonDisplayTitle, "The Long Winter")
     }
+
+    func test_seasonZeroAlwaysUsesSpecialsEvenWhenServerCallsItSeasonZero() {
+        let item = MediaItem(
+            ref: MediaItemRef(providerID: "jellyfin:server", itemID: "special-1"),
+            kind: .episode, title: "Holiday Special", sortTitle: nil, overview: nil,
+            year: 2026, runtime: 2_700, parentRef: nil, grandparentRef: nil,
+            episodeNumber: 1, seasonNumber: 0, childProgress: nil,
+            userState: MediaUserState(isPlayed: false, viewOffset: 0, isFavorite: false, lastViewedAt: nil),
+            artwork: MediaArtwork(poster: nil, backdrop: nil, thumbnail: nil, logo: nil),
+            parentArtwork: nil, grandparentArtwork: nil,
+            seriesTitle: "Northern Lights", seasonTitle: "Season 0"
+        )
+
+        XCTAssertEqual(item.seasonDisplayTitle, "Specials")
+        XCTAssertEqual(item.episodeString, "Special 1")
+        XCTAssertEqual(item.episodeCoordinate, "Special 1")
+        XCTAssertEqual(item.episodeHierarchyTitle, "Northern Lights  ·  Special 1")
+    }
+
+    func test_animeClassificationDoesNotHideGenericAnimation() {
+        let base = MediaItem(
+            ref: MediaItemRef(providerID: "jellyfin:server", itemID: "animation"),
+            kind: .show, title: "Animated", sortTitle: nil, overview: nil,
+            year: 2026, runtime: nil, genres: ["Animation"], tags: [],
+            parentRef: nil, grandparentRef: nil, episodeNumber: nil, seasonNumber: nil,
+            childProgress: nil,
+            userState: MediaUserState(isPlayed: false, viewOffset: 0, isFavorite: false, lastViewedAt: nil),
+            artwork: MediaArtwork(poster: nil, backdrop: nil, thumbnail: nil, logo: nil),
+            parentArtwork: nil, grandparentArtwork: nil
+        )
+        var anime = base
+        anime = MediaItem(
+            ref: MediaItemRef(providerID: "jellyfin:server", itemID: "anime"),
+            kind: .show, title: "Anime", sortTitle: nil, overview: nil,
+            year: 2026, runtime: nil, genres: ["Animation"], tags: ["Anime"],
+            parentRef: nil, grandparentRef: nil, episodeNumber: nil, seasonNumber: nil,
+            childProgress: nil, userState: base.userState, artwork: base.artwork,
+            parentArtwork: nil, grandparentArtwork: nil
+        )
+        XCTAssertFalse(base.isAnime)
+        XCTAssertTrue(anime.isAnime)
+    }
 }
