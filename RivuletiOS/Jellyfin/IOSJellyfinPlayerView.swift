@@ -31,6 +31,7 @@ struct IOSJellyfinPlayerView: View {
     let context: IOSJellyfinPlaybackContext
     @Environment(\.dismiss) private var dismiss
     @StateObject private var player = AetherPlayer()
+    @StateObject private var watchTogether: JellyfinSyncPlaySessionModel
     @State private var controlsVisible = true
     @State private var panel: Panel?
     @State private var autoHideTask: Task<Void, Never>?
@@ -42,6 +43,11 @@ struct IOSJellyfinPlayerView: View {
     @State private var episodeQueue: [MediaItem]
     @State private var isAdvancing = false
     @State private var chapters: [MediaChapter]
+    @State private var preparedNextEpisode: PreparedEpisode?
+    @State private var nextPreparationTask: Task<Void, Never>?
+    @State private var hideUpNextPrompt = false
+    @State private var watchGroupName = ""
+    @State private var lastBufferingState = false
     @AppStorage("ios.autoplayNextEpisode") private var autoplayNextEpisode = true
     @AppStorage("playerSkipBackwardSeconds") private var skipBackwardSeconds = 10
     @AppStorage("playerSkipForwardSeconds") private var skipForwardSeconds = 30
@@ -50,6 +56,7 @@ struct IOSJellyfinPlayerView: View {
 
     init(context: IOSJellyfinPlaybackContext) {
         self.context = context
+        _watchTogether = StateObject(wrappedValue: JellyfinSyncPlaySessionModel(provider: context.provider))
         _currentItem = State(initialValue: context.item)
         _currentStream = State(initialValue: context.stream)
         _episodeQueue = State(initialValue: context.followingEpisodes)
@@ -82,7 +89,7 @@ struct IOSJellyfinPlayerView: View {
                     HStack {
                         Spacer()
                         Button(chapter.isCredits ? "Skip Credits" : "Skip Intro", systemImage: "forward.end.fill") {
-                            Task { await player.seek(to: chapter.end ?? chapter.start + 90) }
+                            requestSeek(to: chapter.end ?? chapter.start + 90)
                         }
                         .buttonStyle(.plain)
                         .font(.headline)
@@ -92,6 +99,10 @@ struct IOSJellyfinPlayerView: View {
                     }
                 }
                 .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+            if shouldOfferUpNext, let next = preparedNextEpisode?.item ?? episodeQueue.first {
+                upNextPrompt(next)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             }
             if shouldShowActivity {
                 ProgressView(player.isBuffering ? "Buffering…" : currentItem.title)
@@ -103,24 +114,49 @@ struct IOSJellyfinPlayerView: View {
         .coordinateSpace(name: IOSPlayerChromeCoordinateSpace.name)
         .foregroundStyle(.white)
         .statusBarHidden()
-        .task { await load() }
+        .task {
+            configureWatchTogether()
+            watchTogether.connect()
+            await load()
+        }
         .onAppear { restartAutoHide() }
         .onChange(of: player.sourceTime) { _, value in reportProgressIfNeeded(value) }
         .onChange(of: player.state) { _, state in
-            guard state == .ended, autoplayNextEpisode, !episodeQueue.isEmpty else { return }
-            Task { await playNextEpisode() }
+            guard state == .ended else { return }
+            if watchTogether.isActive {
+                Task { _ = await watchTogether.requestNextItem() }
+            } else if autoplayNextEpisode, !episodeQueue.isEmpty {
+                Task { await playNextEpisode() }
+            }
+        }
+        .onChange(of: player.isBuffering) { _, buffering in
+            guard buffering != lastBufferingState, watchTogether.isActive else { return }
+            lastBufferingState = buffering
+            Task {
+                if buffering {
+                    await watchTogether.buffering(position: player.sourceTime, isPlaying: isPlaying)
+                } else {
+                    await watchTogether.ready(position: player.sourceTime, isPlaying: isPlaying)
+                }
+            }
         }
         .onPreferenceChange(IOSPlayerRailTopPreferenceKey.self) { osdTop = $0 }
         .onReceive(NotificationCenter.default.publisher(for: CaptionAppearance.changedNotification)) { _ in
             captionStyle = CaptionAppearance.current()
         }
-        .sheet(item: $panel) { playerPanel($0).presentationDetents([.medium]).presentationDragIndicator(.visible) }
+        .sheet(item: $panel) {
+            playerPanel($0)
+                .presentationDetents($0 == .watchTogether || $0 == .upNext ? [.medium, .large] : [.medium])
+                .presentationDragIndicator(.visible)
+        }
         .onDisappear {
             autoHideTask?.cancel()
+            nextPreparationTask?.cancel()
             let position = player.sourceTime
             player.stop()
             let reporter = context.provider.progressReporter(for: currentItem.ref, streamInfo: currentStream)
             Task { await reporter.stopped(at: position) }
+            Task { await watchTogether.disconnect(leavingGroup: true) }
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
     }
@@ -150,7 +186,7 @@ struct IOSJellyfinPlayerView: View {
                     ) { togglePlayback() }
                 ),
                 compact: true,
-                onSeek: { value in Task { await player.seek(to: value) } }
+                onSeek: { value in requestSeek(to: value) }
             ) {
                 HStack(spacing: 4) {
                     IOSPlayerControlButton(title: "Subtitles", systemImage: subtitleIcon, compact: true, dense: true) { show(.subtitles) }
@@ -163,10 +199,14 @@ struct IOSJellyfinPlayerView: View {
                             .accessibilityLabel("AirPlay")
                     }
                     if !episodeQueue.isEmpty {
-                        IOSPlayerControlButton(title: "Next", systemImage: "forward.end.fill", compact: true, dense: true) {
-                            Task { await playNextEpisode() }
-                        }
+                        IOSPlayerControlButton(title: "Up Next", systemImage: "list.and.film", compact: true, dense: true) { show(.upNext) }
                     }
+                    IOSPlayerControlButton(
+                        title: "Watch Together",
+                        systemImage: watchTogether.isActive ? "person.2.wave.2.fill" : "person.2.wave.2",
+                        compact: true,
+                        dense: true
+                    ) { show(.watchTogether) }
                     IOSPlayerControlButton(title: "Info", systemImage: "info.circle", compact: true, dense: true) { show(.info) }
                 }
             }
@@ -233,10 +273,146 @@ struct IOSJellyfinPlayerView: View {
                             }
                         }
                     }
+                case .upNext:
+                    if episodeQueue.isEmpty {
+                        ContentUnavailableView("End of series", systemImage: "checkmark.circle")
+                    } else {
+                        ForEach(episodeQueue) { episode in
+                            Button {
+                                Task { await playEpisodeFromQueue(episode) }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(episode.title)
+                                    Text(episode.episodeString ?? "Next episode")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                case .watchTogether:
+                    watchTogetherPanel
                 }
             }
             .navigationTitle(panel.title).navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { self.panel = nil } } }
+        }
+    }
+
+    @ViewBuilder private var watchTogetherPanel: some View {
+        if let group = watchTogether.activeGroup {
+            Section {
+                HStack(spacing: 12) {
+                    Image(systemName: "person.2.wave.2.fill")
+                        .font(.title2).foregroundStyle(.tint)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(group.name).font(.headline)
+                        Text(group.state == .playing ? "Watching now" : group.state.rawValue)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text("\(max(1, group.participants.count))")
+                        .font(.headline.monospacedDigit())
+                }
+                ForEach(group.participants, id: \.self) { participant in
+                    Label(participant, systemImage: "person.crop.circle.fill")
+                }
+            } header: {
+                Text("Connected")
+            }
+            Section {
+                Button("Leave Watch Together", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
+                    Task { await watchTogether.leave() }
+                }
+            }
+        } else {
+            Section("Start a group") {
+                TextField("Group name", text: $watchGroupName)
+                Button("Start Watch Together", systemImage: "plus") {
+                    let defaultName = "\(context.provider.session.user.name)’s Watch Party"
+                    let ids = ([currentItem] + episodeQueue).map(\.ref.itemID)
+                    Task {
+                        await watchTogether.create(
+                            named: watchGroupName.isEmpty ? defaultName : watchGroupName,
+                            itemIDs: ids,
+                            currentIndex: 0,
+                            position: player.sourceTime
+                        )
+                    }
+                }
+                .disabled(watchTogether.isBusy)
+            }
+
+            Section("Available groups") {
+                if watchTogether.groups.isEmpty, watchTogether.isConnected {
+                    ContentUnavailableView("No groups yet", systemImage: "person.2.slash")
+                } else if !watchTogether.isConnected {
+                    HStack { ProgressView(); Text("Connecting…").foregroundStyle(.secondary) }
+                } else {
+                    ForEach(watchTogether.groups) { group in
+                        Button {
+                            Task { await watchTogether.join(group) }
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(group.name)
+                                    Text("\(group.participants.count) watching")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption).foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                }
+                Button("Refresh", systemImage: "arrow.clockwise") {
+                    Task { await watchTogether.refreshGroups() }
+                }
+                .disabled(watchTogether.isBusy)
+            }
+        }
+
+        if let message = watchTogether.message {
+            Section { Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
+        }
+    }
+
+    private func upNextPrompt(_ next: MediaItem) -> some View {
+        VStack {
+            Spacer()
+            HStack {
+                Spacer()
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "forward.end.fill")
+                            .font(.title3).foregroundStyle(.tint)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(autoplayNextEpisode ? "Up next in \(upNextCountdown)s" : "Up Next")
+                                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            Text(next.title).font(.headline).lineLimit(1)
+                            if let episode = next.episodeString {
+                                Text(episode).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer(minLength: 8)
+                        Button { withAnimation(.snappy) { hideUpNextPrompt = true } } label: {
+                            Image(systemName: "xmark").frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    HStack {
+                        Button("Play Now", systemImage: "play.fill") { Task { await playNextEpisode() } }
+                            .buttonStyle(.borderedProminent)
+                        Button("Episodes", systemImage: "list.and.film") { show(.upNext) }
+                            .buttonStyle(.bordered)
+                    }
+                }
+                .padding(16)
+                .frame(width: 340)
+                .glassEffect(.regular, in: .rect(cornerRadius: 22))
+                .padding(.trailing, 18)
+                .padding(.bottom, controlsVisible ? 122 : 22)
+            }
         }
     }
 
@@ -274,6 +450,15 @@ struct IOSJellyfinPlayerView: View {
         }
     }
 
+    private var shouldOfferUpNext: Bool {
+        guard !hideUpNextPrompt, !episodeQueue.isEmpty, player.duration > 0 else { return false }
+        return player.duration - player.sourceTime <= 30 && player.duration - player.sourceTime > 0
+    }
+
+    private var upNextCountdown: Int {
+        max(1, Int(ceil(max(0, player.duration - player.sourceTime))))
+    }
+
     private func load() async {
         guard let url = currentStream.source.streamURL else { return }
         do {
@@ -287,6 +472,7 @@ struct IOSJellyfinPlayerView: View {
                 headers: currentStream.requestHeaders,
                 startTime: currentItem.userState.viewOffset > 0 ? currentItem.userState.viewOffset : nil
             )
+            prepareNextEpisode()
         } catch is CancellationError { }
         catch { }
     }
@@ -294,16 +480,32 @@ struct IOSJellyfinPlayerView: View {
     private func togglePlayback() {
         let reporter = context.provider.progressReporter(for: currentItem.ref, streamInfo: currentStream)
         if isPlaying {
-            player.pause(); Task { await reporter.paused(at: player.sourceTime) }
+            player.pause()
+            Task {
+                if watchTogether.isActive { await watchTogether.requestPause() }
+                await reporter.paused(at: player.sourceTime)
+            }
         } else {
-            player.play(); Task { await reporter.progress(position: player.sourceTime) }
+            player.play()
+            Task {
+                if watchTogether.isActive { await watchTogether.requestUnpause() }
+                await reporter.progress(position: player.sourceTime)
+            }
         }
         restartAutoHide()
     }
 
     private func seek(by delta: TimeInterval) {
         let duration = max(currentStream.source.duration, player.duration)
-        Task { await player.seek(to: min(max(player.sourceTime + delta, 0), max(duration, 0))) }
+        requestSeek(to: min(max(player.sourceTime + delta, 0), max(duration, 0)))
+        restartAutoHide()
+    }
+
+    private func requestSeek(to position: TimeInterval) {
+        Task {
+            await player.seek(to: position)
+            if watchTogether.isActive { await watchTogether.requestSeek(to: position) }
+        }
         restartAutoHide()
     }
 
@@ -317,6 +519,22 @@ struct IOSJellyfinPlayerView: View {
 
     private func playNextEpisode() async {
         guard !isAdvancing, let next = episodeQueue.first else { return }
+        await playEpisodeFromQueue(next)
+    }
+
+    private func playEpisodeFromQueue(_ next: MediaItem) async {
+        guard !isAdvancing, let nextIndex = episodeQueue.firstIndex(where: { $0.ref == next.ref }) else { return }
+        if watchTogether.isActive {
+            let requested: Bool
+            if nextIndex == 0 {
+                requested = await watchTogether.requestNextItem()
+            } else {
+                requested = await watchTogether.replaceQueue(
+                    itemIDs: Array(episodeQueue.dropFirst(nextIndex)).map(\.ref.itemID)
+                )
+            }
+            if requested { panel = nil; return }
+        }
         isAdvancing = true
         defer { isAdvancing = false }
         let finishedReporter = context.provider.progressReporter(
@@ -325,16 +543,164 @@ struct IOSJellyfinPlayerView: View {
         )
         await finishedReporter.stopped(at: max(player.sourceTime, currentStream.source.duration))
         do {
-            let stream = try await context.provider.resolveStream(for: next.ref, sourceID: nil)
+            let prepared = preparedNextEpisode?.item.ref == next.ref ? preparedNextEpisode : nil
+            let stream: StreamInfo
+            if let prepared {
+                stream = prepared.stream
+            } else {
+                stream = try await context.provider.resolveStream(for: next.ref, sourceID: nil)
+            }
             player.stop()
-            episodeQueue.removeFirst()
+            episodeQueue.removeFirst(nextIndex + 1)
             currentItem = next
             currentStream = stream
-            chapters = (try? await context.provider.fullDetail(for: next.ref).chapters) ?? []
+            if let prepared {
+                chapters = prepared.chapters
+            } else if let detail = try? await context.provider.fullDetail(for: next.ref) {
+                chapters = detail.chapters
+            } else {
+                chapters = []
+            }
+            preparedNextEpisode = nil
+            hideUpNextPrompt = false
             lastReportedSecond = -1
+            panel = nil
             await load()
         } catch {
             player.stop()
+        }
+    }
+
+    private func prepareNextEpisode() {
+        nextPreparationTask?.cancel()
+        preparedNextEpisode = nil
+        guard let next = episodeQueue.first else { return }
+        nextPreparationTask = Task {
+            do {
+                async let stream = context.provider.resolveStream(for: next.ref, sourceID: nil)
+                async let detail = context.provider.fullDetail(for: next.ref)
+                let (loadedStream, loadedDetail) = try await (stream, detail)
+                let prepared = PreparedEpisode(item: next, stream: loadedStream, chapters: loadedDetail.chapters)
+                guard !Task.isCancelled, episodeQueue.first?.ref == next.ref else { return }
+                preparedNextEpisode = prepared
+            } catch is CancellationError { }
+            catch { }
+        }
+    }
+
+    private func configureWatchTogether() {
+        watchTogether.onEvent = { event in
+            switch event {
+            case .command(let command):
+                applySyncPlayCommand(command)
+            case .queueChanged(let queue):
+                applySyncPlayQueue(queue)
+            default:
+                break
+            }
+        }
+    }
+
+    private func applySyncPlayCommand(_ command: JellyfinSyncPlayCommand) {
+        Task {
+            if let when = command.executeAt {
+                let delay = max(0, when.timeIntervalSinceNow)
+                if delay > 0 { try? await Task.sleep(for: .seconds(min(delay, 5))) }
+            }
+            switch command.kind {
+            case .pause:
+                player.pause()
+            case .unpause:
+                if let position = command.position, abs(player.sourceTime - position) > 1.25 {
+                    await player.seek(to: position)
+                }
+                player.play()
+            case .seek:
+                if let position = command.position { await player.seek(to: position) }
+            case .stop:
+                player.stop()
+                dismiss()
+            }
+        }
+    }
+
+    private func applySyncPlayQueue(_ queue: JellyfinSyncPlayQueueSnapshot) {
+        guard let active = queue.current else { return }
+        Task {
+            if active.itemID == currentItem.ref.itemID {
+                if abs(player.sourceTime - queue.startPosition) > 1.25 {
+                    await player.seek(to: queue.startPosition)
+                }
+                queue.isPlaying ? player.play() : player.pause()
+                await watchTogether.ready(position: player.sourceTime, isPlaying: queue.isPlaying)
+                return
+            }
+            await loadSyncPlayItem(
+                active.itemID,
+                position: queue.startPosition,
+                shouldPlay: queue.isPlaying,
+                queue: queue
+            )
+        }
+    }
+
+    private func loadSyncPlayItem(
+        _ itemID: String,
+        position: TimeInterval,
+        shouldPlay: Bool,
+        queue: JellyfinSyncPlayQueueSnapshot
+    ) async {
+        guard !isAdvancing else { return }
+        isAdvancing = true
+        defer { isAdvancing = false }
+        do {
+            let ref = MediaItemRef(providerID: context.provider.id, itemID: itemID)
+            async let detail = context.provider.fullDetail(for: ref)
+            async let stream = context.provider.resolveStream(for: ref, sourceID: nil)
+            let loadedDetail = try await detail
+            let loadedStream = try await stream
+            player.stop()
+            currentItem = loadedDetail.item
+            currentStream = loadedStream
+            chapters = loadedDetail.chapters
+            episodeQueue = []
+            preparedNextEpisode = nil
+            lastReportedSecond = -1
+            guard let url = loadedStream.source.streamURL else { return }
+            let reporter = context.provider.progressReporter(for: ref, streamInfo: loadedStream)
+            await reporter.start()
+            try await player.load(url: url, headers: loadedStream.requestHeaders, startTime: position)
+            if !shouldPlay { player.pause() }
+            await watchTogether.ready(position: player.sourceTime, isPlaying: shouldPlay)
+            rebuildFollowingEpisodes(from: queue, currentItemID: itemID)
+        } catch {
+            await watchTogether.buffering(position: position, isPlaying: shouldPlay)
+        }
+    }
+
+    private func rebuildFollowingEpisodes(
+        from queue: JellyfinSyncPlayQueueSnapshot,
+        currentItemID: String
+    ) {
+        let nextIDs = queue.items
+            .dropFirst(queue.playingIndex + 1)
+            .prefix(12)
+            .map(\.itemID)
+        guard !nextIDs.isEmpty else { return }
+
+        Task {
+            var loaded: [MediaItem] = []
+            loaded.reserveCapacity(nextIDs.count)
+            for id in nextIDs {
+                guard !Task.isCancelled else { return }
+                let ref = MediaItemRef(providerID: context.provider.id, itemID: id)
+                if let detail = try? await context.provider.fullDetail(for: ref) {
+                    loaded.append(detail.item)
+                }
+            }
+            guard currentItem.ref.itemID == currentItemID else { return }
+            episodeQueue = loaded
+            prepareNextEpisode()
         }
     }
 
@@ -351,9 +717,21 @@ struct IOSJellyfinPlayerView: View {
     }
 
     private enum Panel: String, Identifiable {
-        case subtitles, audio, playback, info
+        case subtitles, audio, playback, info, upNext, watchTogether
         var id: String { rawValue }
-        var title: String { rawValue.capitalized }
+        var title: String {
+            switch self {
+            case .upNext: "Up Next"
+            case .watchTogether: "Watch Together"
+            default: rawValue.capitalized
+            }
+        }
+    }
+
+    private struct PreparedEpisode {
+        let item: MediaItem
+        let stream: StreamInfo
+        let chapters: [MediaChapter]
     }
 }
 

@@ -140,6 +140,13 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.4.0 (80)", [
+            "Jellyfin Watch Together on iPhone, iPad and Mac uses native SyncPlay rooms, synchronized controls and shared episode queues",
+            "Up Next now preloads the following episode and offers a compact countdown, episode browser and Play Now action",
+            "Skip Intro and Skip Credits stay synchronized for everyone in an active Watch Together room",
+            "Playback timing compensates for Jellyfin server clock and network latency before scheduled group commands",
+            "Improved buffering handoff, remote episode changes and player control reliability",
+        ]),
         ("1.3.0 (79)", [
             "Connect Apple TV or another device by scanning its secure Quick Connect QR code with a signed-in iPhone or iPad",
             "Quick Connect QR codes contain no password, access token, or connection secret",
