@@ -140,6 +140,13 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.6.1 (83)", [
+            "Verified and installed on iPhone 17e with live Jellyfin catalogs and episode playback",
+            "Trailer controls no longer overlap title actions and embedded provider chrome stays outside the cinematic stage",
+            "Catalog heroes never flash artwork from the previously opened title while new metadata loads",
+            "TV catalog heroes prefer complete series entries instead of resuming on an isolated episode",
+            "Recommendation shelves remove the title that prompted the recommendation and collapse mirrored Jellyfin copies",
+        ]),
         ("1.6.0 (82)", [
             "Jellyfin Season 0 is now presented as Specials across iPhone, iPad, Mac and Apple TV",
             "Home, Discover, Movies and TV Shows now include native Top Picks, Director’s Picks, genre rails, watchlists, favorites and Coming Soon shelves",

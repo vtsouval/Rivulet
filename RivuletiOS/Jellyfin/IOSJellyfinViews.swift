@@ -546,6 +546,10 @@ struct IOSJellyfinHero: View {
             .padding(.horizontal)
         }
         .buttonStyle(.plain)
+        // AsyncImage may otherwise retain the previous successful image while
+        // a new Home/Discover hero starts loading. Re-key the complete hero so
+        // navigation never flashes artwork from another title.
+        .id(item.ref)
     }
 }
 
@@ -615,6 +619,7 @@ struct IOSJellyfinArtwork: View {
             default: placeholder.redacted(reason: .placeholder)
             }
         }
+        .id(url?.absoluteString ?? "jellyfin-artwork-placeholder")
         .aspectRatio(aspectRatio, contentMode: .fit)
         .clipped()
         .background(Color.white.opacity(0.05))

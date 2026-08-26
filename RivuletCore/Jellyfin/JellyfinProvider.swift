@@ -396,8 +396,9 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         if !personalPicks.isEmpty {
             result.append(MediaHub(id: "\(id):picks", providerID: id, title: "Top Picks for You", style: .shelf, items: Array(personalPicks)))
         }
-        if !because.items.isEmpty {
-            result.append(MediaHub(id: "\(id):because", providerID: id, title: because.title ?? "Because You Watched", style: .shelf, items: visible(because.items)))
+        let becauseItems = Self.recommendationsExcludingAnchor(visible(because.items), title: because.title)
+        if becauseItems.count >= 2 {
+            result.append(MediaHub(id: "\(id):because", providerID: id, title: because.title ?? "Because You Watched", style: .shelf, items: becauseItems))
         }
         let editorial = visible(dailyRotated(ratedMovies, limit: 18))
         if !editorial.isEmpty {
@@ -434,7 +435,7 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         if !ratedShows.isEmpty {
             result.append(MediaHub(id: "\(id):top-shows", providerID: id, title: "Critically Acclaimed TV", style: .shelf, items: visible(ratedShows)))
         }
-        return uniqueAcrossHubs(result)
+        return Self.uniqueAcrossHubs(result)
     }
 
     func hubs(in library: MediaLibrary) async throws -> [MediaHub] {
@@ -488,7 +489,7 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
             MediaHub(id: "\(id):\(library.id):favorites", providerID: id, title: "Favorites", style: .shelf, items: favoriteItems),
             MediaHub(id: "\(id):\(library.id):upcoming", providerID: id, title: "Coming Soon", style: .shelf, items: upcomingItems)
         ]
-        return uniqueAcrossHubs(result.filter { !$0.items.isEmpty })
+        return Self.uniqueAcrossHubs(result.filter { !$0.items.isEmpty })
     }
 
     // MARK: - Playback
@@ -831,13 +832,52 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         }.prefix(max(0, maximum)).map { $0 }
     }
 
-    private func uniqueAcrossHubs(_ hubs: [MediaHub]) -> [MediaHub] {
-        var seen = Set<MediaItemRef>()
+    static func uniqueAcrossHubs(_ hubs: [MediaHub]) -> [MediaHub] {
+        var seen = Set<String>()
         return hubs.compactMap { hub in
-            let items = hub.items.filter { seen.insert($0.ref).inserted }
+            let items = hub.items.filter { seen.insert(semanticIdentity(for: $0)).inserted }
             guard !items.isEmpty else { return nil }
             return MediaHub(id: hub.id, providerID: hub.providerID, title: hub.title, style: hub.style, items: items)
         }
+    }
+
+    static func recommendationsExcludingAnchor(_ items: [MediaItem], title: String?) -> [MediaItem] {
+        var unique = Set<String>()
+        let anchorPrefix = "becauseyouwatched"
+        let normalizedHeading = normalizedIdentityText(title)
+        let anchor = normalizedHeading.hasPrefix(anchorPrefix)
+            ? String(normalizedHeading.dropFirst(anchorPrefix.count))
+            : ""
+        return items.filter { item in
+            let itemTitle = normalizedIdentityText(item.title)
+            guard anchor.isEmpty || itemTitle != anchor else { return false }
+            return unique.insert(semanticIdentity(for: item)).inserted
+        }
+    }
+
+    /// Jellyfin may expose mirrored copies of a title under different item IDs.
+    /// Recommendation plugins can therefore return five technically distinct
+    /// IDs that all render as the same movie. Deduplicate by what the viewer
+    /// sees, while retaining separate episodes with identical titles.
+    static func semanticIdentity(for item: MediaItem) -> String {
+        switch item.kind {
+        case .episode:
+            return [
+                item.kind.rawValue, normalizedIdentityText(item.seriesTitle),
+                String(item.seasonNumber ?? -1), String(item.episodeNumber ?? -1),
+                normalizedIdentityText(item.title)
+            ].joined(separator: ":")
+        case .movie, .show, .season:
+            return [item.kind.rawValue, normalizedIdentityText(item.title), String(item.year ?? -1)].joined(separator: ":")
+        default:
+            return "\(item.kind.rawValue):\(item.ref.providerID):\(item.ref.itemID)"
+        }
+    }
+
+    static func normalizedIdentityText(_ value: String?) -> String {
+        (value ?? "")
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .filter { $0.isLetter || $0.isNumber }
     }
 
     private func watchlistCatalog(

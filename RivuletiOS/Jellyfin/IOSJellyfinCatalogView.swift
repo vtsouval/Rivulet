@@ -28,7 +28,7 @@ struct IOSJellyfinCatalogView: View {
                 LazyVStack(spacing: 16) {
                     filterBar
                     if filter == .all, genre == nil, !catalogHubs.isEmpty {
-                        if let hero = catalogHubs.first?.items.first {
+                        if let hero = catalogHero {
                             IOSJellyfinHero(item: hero)
                                 .padding(.bottom, 6)
                         }
@@ -98,6 +98,15 @@ struct IOSJellyfinCatalogView: View {
                 title: hub.title, style: hub.style, items: values
             )
         }
+    }
+
+    /// Feature the library itself rather than a Next Up episode. Episode rows
+    /// remain available below, but the large catalog artwork now consistently
+    /// represents a movie or series.
+    private var catalogHero: MediaItem? {
+        let expected: MediaKind = kind == .movies ? .movie : .show
+        return catalogHubs.lazy.flatMap(\.items).first(where: { $0.kind == expected })
+            ?? catalogHubs.first?.items.first
     }
 
     private var filterBar: some View {

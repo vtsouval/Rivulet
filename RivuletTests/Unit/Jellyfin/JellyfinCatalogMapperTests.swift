@@ -83,6 +83,36 @@ final class JellyfinCatalogMapperTests: XCTestCase {
         XCTAssertEqual(episode.episodeHierarchyTitle, "Northern Lights  ·  Special 2")
     }
 
+    func testRecommendationRailRemovesAnchorAndMirroredTitles() {
+        let anchor = makeItem(id: "inception-a", title: "Inception", year: 2010)
+        let mirrored = makeItem(id: "inception-b", title: "INCEPTION", year: 2010)
+        let alternateYear = makeItem(id: "inception-remake", title: "Inception", year: 2025)
+        let other = makeItem(id: "arrival", title: "Arrival", year: 2016)
+
+        let result = JellyfinProvider.recommendationsExcludingAnchor(
+            [anchor, mirrored, alternateYear, other],
+            title: "Because You Watched Inception"
+        )
+
+        XCTAssertEqual(result.map(\.ref.itemID), ["arrival"])
+    }
+
+    func testHomeHubsDeduplicateMirroredTitlesAcrossRails() {
+        let first = makeItem(id: "arrival-a", title: "Arrival", year: 2016)
+        let mirrored = makeItem(id: "arrival-b", title: "Arrival", year: 2016)
+        let distinct = makeItem(id: "contact", title: "Contact", year: 1997)
+        let hubs = [
+            MediaHub(id: "one", providerID: "jellyfin:test", title: "One", style: .shelf, items: [first]),
+            MediaHub(id: "two", providerID: "jellyfin:test", title: "Two", style: .shelf, items: [mirrored, distinct])
+        ]
+
+        let result = JellyfinProvider.uniqueAcrossHubs(hubs)
+
+        XCTAssertEqual(result.count, 2)
+        XCTAssertEqual(result[0].items.map(\.ref.itemID), ["arrival-a"])
+        XCTAssertEqual(result[1].items.map(\.ref.itemID), ["contact"])
+    }
+
     func testEpisodeMapsHierarchyProgressDatesAndArtwork() throws {
         let dto: JellyfinBaseItemDTO = try decode(
             """
@@ -144,6 +174,27 @@ final class JellyfinCatalogMapperTests: XCTestCase {
         XCTAssertTrue(item.parentArtwork?.poster?.absoluteString.contains("season-primary") == true)
         XCTAssertTrue(item.grandparentArtwork?.poster?.absoluteString.contains("series-primary") == true)
         XCTAssertTrue(item.grandparentArtwork?.backdrop?.absoluteString.contains("series-backdrop") == true)
+    }
+
+    private func makeItem(id: String, title: String, year: Int) -> MediaItem {
+        MediaItem(
+            ref: MediaItemRef(providerID: "jellyfin:test", itemID: id),
+            kind: .movie,
+            title: title,
+            sortTitle: nil,
+            overview: nil,
+            year: year,
+            runtime: nil,
+            parentRef: nil,
+            grandparentRef: nil,
+            episodeNumber: nil,
+            seasonNumber: nil,
+            childProgress: nil,
+            userState: MediaUserState(isPlayed: false, viewOffset: 0, isFavorite: false, lastViewedAt: nil),
+            artwork: MediaArtwork(poster: nil, backdrop: nil, thumbnail: nil, logo: nil),
+            parentArtwork: nil,
+            grandparentArtwork: nil
+        )
     }
 
     func testEqualNativeIDsOnDifferentServersRemainDistinct() throws {
