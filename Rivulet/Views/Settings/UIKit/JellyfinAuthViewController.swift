@@ -281,7 +281,7 @@ final class JellyfinAuthViewController: UIViewController {
                 self.quickQRCodeView.image = Self.quickConnectQRImage(for: payload.url)
                 self.quickCodeLabel.text = started.code
                 self.quickCodeLabel.isHidden = false
-                self.showStatus("Scan with Rivulet on iPhone or iPad.", isError: false)
+                self.showStatus("Scan with your phone to approve securely.", isError: false)
 
                 let deadline = Date().addingTimeInterval(300)
                 var state = started

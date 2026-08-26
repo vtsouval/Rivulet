@@ -74,7 +74,9 @@ final class JellyfinCatalogMapperTests: XCTestCase {
               "OfficialRating":"TV-14",
               "RunTimeTicks":27000000000,
               "SeasonId":"season-1",
+              "SeasonName":"Season One",
               "SeriesId":"series-1",
+              "SeriesName":"The Example Show",
               "IndexNumber":2,
               "ParentIndexNumber":1,
               "ImageTags":{"Primary":"episode-primary","Thumb":"episode-thumb"},
@@ -103,6 +105,9 @@ final class JellyfinCatalogMapperTests: XCTestCase {
         XCTAssertEqual(item.grandparentRef?.itemID, "series-1")
         XCTAssertEqual(item.episodeNumber, 2)
         XCTAssertEqual(item.seasonNumber, 1)
+        XCTAssertEqual(item.seriesTitle, "The Example Show")
+        XCTAssertEqual(item.seasonTitle, "Season One")
+        XCTAssertEqual(item.episodeHierarchyTitle, "The Example Show  ·  S1, E2")
         XCTAssertEqual(item.userState.viewOffset, 12.5)
         XCTAssertTrue(item.userState.isFavorite)
         XCTAssertNotNil(item.userState.lastViewedAt)

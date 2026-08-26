@@ -39,6 +39,13 @@ struct MediaItem: Identifiable, Hashable, Sendable, Codable {
     let seasonNumber: Int?               // episodes/seasons only — Plex `parentIndex`
     let childProgress: ChildProgress?    // shows/seasons only — for "12/24 watched"
 
+    /// Human-readable hierarchy supplied by the provider. IDs remain the
+    /// source of identity; these titles are presentation metadata so episode
+    /// screens and player chrome never need a second lookup just to say which
+    /// show and season are playing.
+    let seriesTitle: String?
+    let seasonTitle: String?
+
     let userState: MediaUserState
 
     // Artwork — own + hierarchy
@@ -65,7 +72,9 @@ struct MediaItem: Identifiable, Hashable, Sendable, Codable {
         userState: MediaUserState,
         artwork: MediaArtwork,
         parentArtwork: MediaArtwork?,
-        grandparentArtwork: MediaArtwork?
+        grandparentArtwork: MediaArtwork?,
+        seriesTitle: String? = nil,
+        seasonTitle: String? = nil
     ) {
         self.ref = ref
         self.kind = kind
@@ -86,6 +95,8 @@ struct MediaItem: Identifiable, Hashable, Sendable, Codable {
         self.artwork = artwork
         self.parentArtwork = parentArtwork
         self.grandparentArtwork = grandparentArtwork
+        self.seriesTitle = seriesTitle
+        self.seasonTitle = seasonTitle
     }
 }
 
@@ -120,7 +131,9 @@ extension MediaItem {
                 logo: logo
             ),
             parentArtwork: parentArtwork,
-            grandparentArtwork: grandparentArtwork
+            grandparentArtwork: grandparentArtwork,
+            seriesTitle: seriesTitle,
+            seasonTitle: seasonTitle
         )
     }
 }

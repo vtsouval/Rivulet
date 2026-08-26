@@ -27,7 +27,9 @@ nonisolated struct JellyfinBaseItemDTO: Decodable, Hashable, Sendable {
 
     let parentID: String?
     let seriesID: String?
+    let seriesName: String?
     let seasonID: String?
+    let seasonName: String?
     let indexNumber: Int?
     let parentIndexNumber: Int?
     let childCount: Int?
@@ -76,7 +78,9 @@ nonisolated struct JellyfinBaseItemDTO: Decodable, Hashable, Sendable {
         case runTimeTicks = "RunTimeTicks"
         case parentID = "ParentId"
         case seriesID = "SeriesId"
+        case seriesName = "SeriesName"
         case seasonID = "SeasonId"
+        case seasonName = "SeasonName"
         case indexNumber = "IndexNumber"
         case parentIndexNumber = "ParentIndexNumber"
         case childCount = "ChildCount"

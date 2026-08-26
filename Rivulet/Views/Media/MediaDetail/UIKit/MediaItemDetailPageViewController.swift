@@ -91,7 +91,9 @@ final class MediaItemDetailPageViewController: UIViewController {
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .overFullScreen
         transitioningDelegate = blurFade      // blur-fade present/dismiss
-        if let seriesTitle, !seriesTitle.isEmpty { setShowTitle(seriesTitle) }
+        if let resolvedTitle = seriesTitle ?? item.seriesTitle, !resolvedTitle.isEmpty {
+            setShowTitle(resolvedTitle)
+        }
     }
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }

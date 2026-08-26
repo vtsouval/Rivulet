@@ -4,8 +4,9 @@
 import Foundation
 
 /// Non-secret QR payload used to hand a pending Jellyfin Quick Connect request
-/// from a television/new device to an already authenticated Rivulet client.
-/// The access token and Quick Connect secret are deliberately never encoded.
+/// from a television/new device to an already authenticated client. It accepts
+/// both Rivulet deep links and Bonfire's browser approval route. The access
+/// token and Quick Connect secret are deliberately never encoded.
 nonisolated struct JellyfinQuickConnectPayload: Codable, Hashable, Sendable {
     static let scheme = "rivulet"
     static let host = "jellyfin"
@@ -20,19 +21,55 @@ nonisolated struct JellyfinQuickConnectPayload: Codable, Hashable, Sendable {
     }
 
     init(url: URL) throws {
-        guard url.scheme?.lowercased() == Self.scheme,
-              url.host?.lowercased() == Self.host,
-              url.path.lowercased() == Self.path,
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let server = components.queryItems?.first(where: { $0.name == "server" })?.value,
-              let code = components.queryItems?.first(where: { $0.name == "code" })?.value else {
+        if url.scheme?.lowercased() == Self.scheme {
+            guard url.host?.lowercased() == Self.host,
+                  url.path.lowercased() == Self.path,
+                  let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                  let server = components.queryItems?.first(where: { $0.name == "server" })?.value,
+                  let code = components.queryItems?.first(where: { $0.name == "code" })?.value else {
+                throw JellyfinAPIError.invalidResponse
+            }
+            self.serverURL = try JellyfinServerURL.normalize(server)
+            self.code = try Self.normalizedCode(code)
+            return
+        }
+
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let fragment = components.fragment,
+              let route = URLComponents(string: "https://approval.invalid\(fragment.hasPrefix("/") ? fragment : "/\(fragment)")"),
+              route.path.lowercased() == "/quickconnect",
+              let code = route.queryItems?.first(where: { $0.name.lowercased() == "code" })?.value else {
             throw JellyfinAPIError.invalidResponse
         }
+
+        components.fragment = nil
+        components.query = nil
+        var path = components.path
+        while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
+        if path.lowercased().hasSuffix("/web") {
+            path.removeLast(4)
+        }
+        components.path = path
+        guard let server = components.url else { throw JellyfinAPIError.invalidResponse }
         self.serverURL = try JellyfinServerURL.normalize(server)
         self.code = try Self.normalizedCode(code)
     }
 
-    var url: URL {
+    /// Browser-compatible QR target used by Bonfire 2.1 and later. A phone's
+    /// regular camera can open this route and Bonfire asks for explicit user
+    /// confirmation before authorizing the short-lived code.
+    var approvalURL: URL {
+        var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false)!
+        var path = components.path
+        while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
+        components.path = "\(path == "/" ? "" : path)/web/"
+        components.fragment = "/quickconnect?code=\(code)"
+        return components.url!
+    }
+
+    /// App deep link retained for direct Rivulet-to-Rivulet handoff.
+    var appURL: URL {
         var components = URLComponents()
         components.scheme = Self.scheme
         components.host = Self.host
@@ -45,6 +82,9 @@ nonisolated struct JellyfinQuickConnectPayload: Codable, Hashable, Sendable {
         return components.url!
     }
 
+    /// QR call sites use the browser-compatible approval route by default.
+    var url: URL { approvalURL }
+
     func belongs(to session: JellyfinAuthenticatedSession) -> Bool {
         guard let sessionURL = try? JellyfinServerURL.normalize(session.serverURL) else { return false }
         return Self.originAndPath(sessionURL) == Self.originAndPath(serverURL)
@@ -52,7 +92,7 @@ nonisolated struct JellyfinQuickConnectPayload: Codable, Hashable, Sendable {
 
     static func code(from scannedValue: String) throws -> String {
         let trimmed = scannedValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let url = URL(string: trimmed), url.scheme?.lowercased() == scheme {
+        if let url = URL(string: trimmed), url.scheme != nil {
             return try JellyfinQuickConnectPayload(url: url).code
         }
         return try normalizedCode(trimmed)

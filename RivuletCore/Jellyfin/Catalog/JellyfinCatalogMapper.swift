@@ -97,7 +97,9 @@ nonisolated enum JellyfinCatalogMapper {
             userState: userState(dto.userData),
             artwork: artwork(dto, context: context),
             parentArtwork: parentArtwork(dto, context: context),
-            grandparentArtwork: grandparentArtwork(dto, context: context)
+            grandparentArtwork: grandparentArtwork(dto, context: context),
+            seriesTitle: normalized(dto.seriesName),
+            seasonTitle: normalized(dto.seasonName)
         )
     }
 

@@ -30,7 +30,7 @@ struct IOSJellyfinQuickConnectCodeView: View {
                 .font(.system(.largeTitle, design: .monospaced, weight: .bold))
                 .tracking(6)
                 .contentTransition(.numericText())
-            Text("Scan with a signed-in Rivulet device")
+            Text("Scan with your phone to approve securely")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
@@ -60,6 +60,7 @@ struct IOSJellyfinQuickConnectAuthorizerView: View {
     @State private var showsScanner = false
     @State private var message: String?
     @State private var succeeded = false
+    @State private var pendingPayload: JellyfinQuickConnectPayload?
 
     var body: some View {
         NavigationStack {
@@ -80,8 +81,8 @@ struct IOSJellyfinQuickConnectAuthorizerView: View {
                             .textInputAutocapitalization(.characters)
                             .autocorrectionDisabled()
                             .font(.system(.title3, design: .monospaced, weight: .semibold))
-                            .onSubmit { Task { await authorizeCode() } }
-                        Button { Task { await authorizeCode() } } label: {
+                            .onSubmit(prepareTypedCode)
+                        Button(action: prepareTypedCode) {
                             Image(systemName: isWorking ? "hourglass" : "arrow.right")
                                 .frame(width: 36, height: 36)
                         }
@@ -114,18 +115,31 @@ struct IOSJellyfinQuickConnectAuthorizerView: View {
             }
         }
         #endif
+        .confirmationDialog(
+            "Connect this device?",
+            isPresented: Binding(
+                get: { pendingPayload != nil },
+                set: { if !$0 { pendingPayload = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Authorize") { Task { await authorizePendingPayload() } }
+            Button("Cancel", role: .cancel) { pendingPayload = nil }
+        } message: {
+            Text(confirmationMessage)
+        }
         .sensoryFeedback(.success, trigger: succeeded)
     }
 
-    private func authorizeCode() async {
-        guard !isWorking else { return }
-        isWorking = true
-        defer { isWorking = false }
+    private var confirmationMessage: String {
+        guard let pendingPayload else { return "" }
+        return "Approve only if code \(pendingPayload.code) is visible on the device in front of you."
+    }
+
+    private func prepareTypedCode() {
         do {
-            try await jellyfin.authorizeQuickConnect(code: code)
-            succeeded = true
-            message = "Device connected"
-            code = ""
+            guard let session = jellyfin.provider?.session else { throw MediaProviderError.unauthorized }
+            pendingPayload = try JellyfinQuickConnectPayload(serverURL: session.serverURL, code: code)
         } catch {
             succeeded = false
             message = IOSJellyfinSession.message(for: error)
@@ -133,18 +147,35 @@ struct IOSJellyfinQuickConnectAuthorizerView: View {
     }
 
     private func authorizeScanned(_ value: String) async {
-        guard !isWorking else { return }
+        do {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            let payload: JellyfinQuickConnectPayload
+            if let url = URL(string: trimmed), url.scheme != nil {
+                payload = try JellyfinQuickConnectPayload(url: url)
+            } else {
+                guard let session = jellyfin.provider?.session else { throw MediaProviderError.unauthorized }
+                payload = try JellyfinQuickConnectPayload(serverURL: session.serverURL, code: trimmed)
+            }
+            guard let session = jellyfin.provider?.session, payload.belongs(to: session) else {
+                throw JellyfinAPIError.forbidden(message: "This Quick Connect request belongs to another Jellyfin server.")
+            }
+            pendingPayload = payload
+        } catch {
+            succeeded = false
+            message = IOSJellyfinSession.message(for: error)
+        }
+    }
+
+    private func authorizePendingPayload() async {
+        guard !isWorking, let payload = pendingPayload else { return }
+        pendingPayload = nil
         isWorking = true
         defer { isWorking = false }
         do {
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let url = URL(string: trimmed), url.scheme?.lowercased() == JellyfinQuickConnectPayload.scheme {
-                try await jellyfin.authorizeQuickConnect(url: url)
-            } else {
-                try await jellyfin.authorizeQuickConnect(code: trimmed)
-            }
+            try await jellyfin.authorizeQuickConnect(payload: payload)
             succeeded = true
             message = "Device connected"
+            code = ""
         } catch {
             succeeded = false
             message = IOSJellyfinSession.message(for: error)

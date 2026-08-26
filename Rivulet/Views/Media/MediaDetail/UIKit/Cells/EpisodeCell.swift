@@ -563,6 +563,7 @@ final class EpisodeCell: UIView {
     private static func episodeLabel(for episode: MediaItem, showSeasonPrefix: Bool) -> String {
         // ATV+ shows "EPISODE N" (the season is conveyed by the pills + the
         // larger between-season gap), not "S01E01".
+        if showSeasonPrefix, let coordinate = episode.episodeCoordinate { return coordinate }
         if let n = episode.episodeNumber { return "Episode \(n)" }
         return episode.episodeString ?? "Episode"
     }

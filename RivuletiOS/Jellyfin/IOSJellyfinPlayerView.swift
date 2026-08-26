@@ -2,6 +2,7 @@
 // Copyright (C) 2025-2026 Bain Gurley
 
 import AVFoundation
+import MediaPlayer
 import SwiftUI
 
 struct IOSJellyfinPlaybackContext: Identifiable {
@@ -48,6 +49,8 @@ struct IOSJellyfinPlayerView: View {
     @State private var hideUpNextPrompt = false
     @State private var watchGroupName = ""
     @State private var lastBufferingState = false
+    @State private var nowPlayingArtwork: MPMediaItemArtwork?
+    @State private var nowPlayingArtworkRef: MediaItemRef?
     @AppStorage("ios.autoplayNextEpisode") private var autoplayNextEpisode = true
     @AppStorage("playerSkipBackwardSeconds") private var skipBackwardSeconds = 10
     @AppStorage("playerSkipForwardSeconds") private var skipForwardSeconds = 30
@@ -122,6 +125,7 @@ struct IOSJellyfinPlayerView: View {
         .onAppear { restartAutoHide() }
         .onChange(of: player.sourceTime) { _, value in reportProgressIfNeeded(value) }
         .onChange(of: player.state) { _, state in
+            updateSystemNowPlaying()
             guard state == .ended else { return }
             if watchTogether.isActive {
                 Task { _ = await watchTogether.requestNextItem() }
@@ -157,6 +161,7 @@ struct IOSJellyfinPlayerView: View {
             let reporter = context.provider.progressReporter(for: currentItem.ref, streamInfo: currentStream)
             Task { await reporter.stopped(at: position) }
             Task { await watchTogether.disconnect(leavingGroup: true) }
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
     }
@@ -171,7 +176,7 @@ struct IOSJellyfinPlayerView: View {
             .padding(.horizontal, 12).padding(.top, 8)
             Spacer()
             IOSPlayerGlassRail(
-                eyebrow: currentItem.episodeString,
+                eyebrow: currentItem.episodeHierarchyTitle,
                 title: currentItem.title,
                 currentTime: player.sourceTime,
                 duration: max(currentStream.source.duration, player.duration),
@@ -243,7 +248,10 @@ struct IOSJellyfinPlayerView: View {
                         }
                     }
                 case .info:
+                    if let show = currentItem.seriesTitle { LabeledContent("TV Show", value: show) }
                     LabeledContent("Title", value: currentItem.title)
+                    if let episode = currentItem.episodeCoordinate { LabeledContent("Episode", value: episode) }
+                    if let season = currentItem.seasonDisplayTitle { LabeledContent("Season", value: season) }
                     if let resolution = currentStream.source.videoResolution { LabeledContent("Quality", value: resolution.uppercased()) }
                     if let container = currentStream.source.container { LabeledContent("Container", value: container.uppercased()) }
                     LabeledContent("Player", value: AetherPlayer.engineName)
@@ -283,7 +291,7 @@ struct IOSJellyfinPlayerView: View {
                             } label: {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(episode.title)
-                                    Text(episode.episodeString ?? "Next episode")
+                                    Text(episode.episodeHierarchyTitle ?? "Next episode")
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
                             }
@@ -390,7 +398,7 @@ struct IOSJellyfinPlayerView: View {
                             Text(autoplayNextEpisode ? "Up next in \(upNextCountdown)s" : "Up Next")
                                 .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                             Text(next.title).font(.headline).lineLimit(1)
-                            if let episode = next.episodeString {
+                            if let episode = next.episodeHierarchyTitle {
                                 Text(episode).font(.caption).foregroundStyle(.secondary)
                             }
                         }
@@ -472,6 +480,8 @@ struct IOSJellyfinPlayerView: View {
                 headers: currentStream.requestHeaders,
                 startTime: currentItem.userState.viewOffset > 0 ? currentItem.userState.viewOffset : nil
             )
+            updateSystemNowPlaying()
+            updateSystemNowPlayingArtwork(for: currentItem)
             prepareNextEpisode()
         } catch is CancellationError { }
         catch { }
@@ -492,6 +502,7 @@ struct IOSJellyfinPlayerView: View {
                 await reporter.progress(position: player.sourceTime)
             }
         }
+        updateSystemNowPlaying()
         restartAutoHide()
     }
 
@@ -515,6 +526,7 @@ struct IOSJellyfinPlayerView: View {
         lastReportedSecond = second
         let reporter = context.provider.progressReporter(for: currentItem.ref, streamInfo: currentStream)
         Task { await reporter.progress(position: value) }
+        updateSystemNowPlaying()
     }
 
     private func playNextEpisode() async {
@@ -552,6 +564,8 @@ struct IOSJellyfinPlayerView: View {
             }
             player.stop()
             episodeQueue.removeFirst(nextIndex + 1)
+            nowPlayingArtwork = nil
+            nowPlayingArtworkRef = nil
             currentItem = next
             currentStream = stream
             if let prepared {
@@ -585,6 +599,41 @@ struct IOSJellyfinPlayerView: View {
                 preparedNextEpisode = prepared
             } catch is CancellationError { }
             catch { }
+        }
+    }
+
+    /// Mirrors Apple's TV episode hierarchy in Control Center, the Lock Screen,
+    /// AirPlay destinations and macOS Now Playing: episode title as the primary
+    /// title, show as artist and season as album.
+    private func updateSystemNowPlaying() {
+        var info: [String: Any] = [
+            MPMediaItemPropertyTitle: currentItem.title,
+            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.video.rawValue,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: max(0, player.sourceTime),
+            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? Double(player.playbackRate) : 0,
+            MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0
+        ]
+        let duration = max(currentStream.source.duration, player.duration)
+        if duration > 0 { info[MPMediaItemPropertyPlaybackDuration] = duration }
+        if let show = currentItem.seriesTitle { info[MPMediaItemPropertyArtist] = show }
+        if let season = currentItem.seasonDisplayTitle { info[MPMediaItemPropertyAlbumTitle] = season }
+        if let episode = currentItem.episodeNumber { info[MPMediaItemPropertyAlbumTrackNumber] = episode }
+        if nowPlayingArtworkRef == currentItem.ref, let nowPlayingArtwork {
+            info[MPMediaItemPropertyArtwork] = nowPlayingArtwork
+        }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    private func updateSystemNowPlayingArtwork(for item: MediaItem) {
+        guard let url = item.artwork.backdrop ?? item.artwork.thumbnail ?? item.artwork.poster else { return }
+        let expectedRef = item.ref
+        Task {
+            guard let image = await IOSArtworkCache.shared.image(for: url),
+                  currentItem.ref == expectedRef else { return }
+            let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+            nowPlayingArtworkRef = expectedRef
+            nowPlayingArtwork = artwork
+            updateSystemNowPlaying()
         }
     }
 
@@ -660,6 +709,8 @@ struct IOSJellyfinPlayerView: View {
             let loadedDetail = try await detail
             let loadedStream = try await stream
             player.stop()
+            nowPlayingArtwork = nil
+            nowPlayingArtworkRef = nil
             currentItem = loadedDetail.item
             currentStream = loadedStream
             chapters = loadedDetail.chapters

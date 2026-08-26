@@ -20,7 +20,7 @@ struct IOSJellyfinDetailView: View {
     init(item: MediaItem) {
         self.item = item
         _isFavorite = State(initialValue: item.userState.isFavorite)
-        _selectedSeason = State(initialValue: max(1, item.seasonNumber ?? 1))
+        _selectedSeason = State(initialValue: item.seasonNumber ?? 1)
     }
 
     var body: some View {
@@ -75,10 +75,19 @@ struct IOSJellyfinDetailView: View {
             )
 
             VStack(alignment: .leading, spacing: 13) {
+                if displayedItem.kind == .episode,
+                   let seriesTitle = displayedItem.seriesTitle,
+                   !seriesTitle.isEmpty {
+                    Text(seriesTitle)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.78))
+                        .lineLimit(1)
+                }
                 Text(displayedItem.title)
                     .font(.system(size: landscape ? 44 : 34, weight: .bold, design: .rounded))
                     .lineLimit(2)
                 HStack(spacing: 9) {
+                    if let coordinate = displayedItem.episodeCoordinate { Text(coordinate) }
                     if let year = displayedItem.year { Text(String(year)) }
                     if let rating = detail?.contentRating ?? displayedItem.contentRating { Text(rating).detailPill() }
                     if let duration = displayedItem.durationFormatted { Text(duration) }
@@ -185,10 +194,16 @@ struct IOSJellyfinDetailView: View {
                             Button {
                                 withAnimation(.snappy(duration: 0.26)) { selectedSeason = season }
                             } label: {
-                                Text("Season \(season)")
-                                    .font(.subheadline.weight(.semibold))
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 9)
+                                HStack(spacing: 6) {
+                                    Text(seasonLabel(season))
+                                    if seasonIsWatched(season) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .font(.caption.weight(.bold))
+                                    }
+                                }
+                                .font(.subheadline.weight(.semibold))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 9)
                             }
                             .buttonStyle(.plain)
                             .foregroundStyle(selectedSeason == season ? Color.black : Color.primary)
@@ -228,19 +243,38 @@ struct IOSJellyfinDetailView: View {
         let matching = episodes.filter { ($0.seasonNumber ?? selectedSeason) == selectedSeason }
         return EpisodePicker.inPlaybackOrder(matching)
     }
-    private var playTitle: String { displayedItem.userState.viewOffset > 0 ? "Resume" : "Play" }
+    private var playTitle: String {
+        let target = displayedItem.kind == .show ? detail?.nextEpisode : displayedItem
+        let verb = (target?.isInProgress == true) ? "Resume" : "Play"
+        guard let coordinate = target?.episodeCoordinate else { return verb }
+        return "\(verb) \(coordinate)"
+    }
+
+    private func seasonLabel(_ season: Int) -> String {
+        episodes.first(where: { $0.seasonNumber == season })?.seasonDisplayTitle
+            ?? (season == 0 ? "Specials" : "Season \(season)")
+    }
+
+    private func seasonIsWatched(_ season: Int) -> Bool {
+        let seasonEpisodes = episodes.filter { $0.seasonNumber == season }
+        return !seasonEpisodes.isEmpty && seasonEpisodes.allSatisfy(\.isWatched)
+    }
 
     private func load() async {
         do {
             async let loadedDetail = jellyfin.detail(for: item)
             async let loadedRelated = jellyfin.related(to: item)
+            async let loadedEpisodes = loadEpisodesIfNeeded()
+            async let loadedWatchlist = jellyfin.isOnWatchlist(item)
             let result = try await loadedDetail
             detail = result
             related = (try? await loadedRelated) ?? []
-            isOnWatchlist = await jellyfin.isOnWatchlist(item)
+            isOnWatchlist = await loadedWatchlist
             if item.kind == .show {
-                episodes = (try? await jellyfin.episodes(of: item)) ?? []
-                if let season = episodes.first(where: { $0.userState.viewOffset > 0 || !$0.userState.isPlayed })?.seasonNumber {
+                episodes = await loadedEpisodes
+                let ordered = EpisodePicker.inPlaybackOrder(episodes)
+                if let season = result.nextEpisode?.seasonNumber
+                    ?? ordered.first(where: { $0.userState.viewOffset > 0 || !$0.userState.isPlayed })?.seasonNumber {
                     selectedSeason = season
                 } else if let first = seasons.first {
                     selectedSeason = first
@@ -248,6 +282,11 @@ struct IOSJellyfinDetailView: View {
             }
             error = nil
         } catch { self.error = IOSJellyfinSession.message(for: error) }
+    }
+
+    private func loadEpisodesIfNeeded() async -> [MediaItem] {
+        guard item.kind == .show else { return [] }
+        return (try? await jellyfin.episodes(of: item)) ?? []
     }
 
     private func preparePlayback() async {
@@ -308,6 +347,11 @@ private struct IOSJellyfinMetadataRow: View {
 private struct IOSJellyfinEpisodeCard: View {
     let episode: MediaItem
     let play: () -> Void
+    @AppStorage("ios.blurEpisodeSpoilers") private var blurSpoilers = true
+
+    private var hidesSpoilers: Bool {
+        blurSpoilers && !episode.isWatched && !episode.isInProgress
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -317,7 +361,15 @@ private struct IOSJellyfinEpisodeCard: View {
                     else { ZStack { Color.white.opacity(0.06); Image(systemName: "play.rectangle") } }
                 }
                 .frame(width: 290, height: 163).clipped()
+                .blur(radius: hidesSpoilers ? 14 : 0)
                 LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .top, endPoint: .bottom)
+                if hidesSpoilers {
+                    Label("Spoiler hidden", systemImage: "eye.slash.fill")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10).padding(.vertical, 7)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                }
                 Button(action: play) { Image(systemName: "play.fill").frame(width: 42, height: 42) }
                     .buttonStyle(.plain).background(.ultraThinMaterial, in: Circle()).padding(12)
                 if episode.isWatched { Image(systemName: "checkmark.circle.fill").foregroundStyle(.cyan).padding(10).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing) }
@@ -325,9 +377,19 @@ private struct IOSJellyfinEpisodeCard: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             Text(episode.title).font(.headline).lineLimit(2).frame(width: 290, alignment: .leading)
-            HStack { if let code = episode.episodeString { Text(code) }; if let duration = episode.durationFormatted { Text(duration) } }
+            HStack { if let code = episode.episodeCoordinate { Text(code) }; if let duration = episode.durationFormatted { Text(duration) } }
                 .font(.caption).foregroundStyle(.secondary)
+            if let overview = episode.overview, !overview.isEmpty {
+                Text(hidesSpoilers ? "Episode description hidden" : overview)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .frame(width: 290, alignment: .leading)
+            }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel([episode.episodeHierarchyTitle, episode.title].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityHint(episode.isInProgress ? "Resumes this episode" : "Plays this episode")
     }
 }
 

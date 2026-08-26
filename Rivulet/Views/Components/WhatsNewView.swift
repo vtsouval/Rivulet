@@ -140,6 +140,15 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.5.0 (81)", [
+            "TV episodes now consistently show the series name, season title, episode title and Apple-style season/episode position",
+            "Show pages open on the next unfinished season and expose Resume or Play for the correct episode",
+            "Episode artwork and descriptions respect each profile's spoiler setting, with watched and in-progress state kept visible",
+            "Season selectors use server-provided names, identify completed seasons and handle Specials correctly",
+            "Control Center, the Lock Screen, AirPlay and Mac Now Playing now receive the TV show, season, episode and artwork hierarchy",
+            "Episode metadata, recommendations, watchlist state and season data load concurrently for faster native show pages",
+            "Quick Connect QR codes now open Bonfire's browser approval screen, while native scanning accepts both Bonfire and Rivulet links with explicit confirmation",
+        ]),
         ("1.4.0 (80)", [
             "Jellyfin Watch Together on iPhone, iPad and Mac uses native SyncPlay rooms, synchronized controls and shared episode queues",
             "Up Next now preloads the following episode and offers a compact countdown, episode browser and Play Now action",

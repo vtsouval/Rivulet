@@ -290,7 +290,9 @@ enum PlexMediaMapper {
             userState: userState(meta),
             artwork: artwork(meta, serverURL: serverURL, authToken: authToken),
             parentArtwork: parentArtwork,
-            grandparentArtwork: grandparentArtwork
+            grandparentArtwork: grandparentArtwork,
+            seriesTitle: mediaKind == .episode ? meta.grandparentTitle : nil,
+            seasonTitle: mediaKind == .episode ? meta.parentTitle : (mediaKind == .season ? meta.title : nil)
         )
     }
 

@@ -208,13 +208,37 @@ final class JellyfinAuthTransportTests: XCTestCase {
 
         XCTAssertEqual(decoded.serverURL.absoluteString, "https://media.example.com/jellyfin")
         XCTAssertEqual(decoded.code, "123456")
+        XCTAssertEqual(
+            payload.approvalURL.absoluteString,
+            "https://media.example.com/jellyfin/web/#/quickconnect?code=123456"
+        )
+        XCTAssertEqual(
+            try JellyfinQuickConnectPayload(url: payload.appURL),
+            payload
+        )
         XCTAssertFalse(payload.url.absoluteString.localizedCaseInsensitiveContains("secret"))
         XCTAssertFalse(payload.url.absoluteString.localizedCaseInsensitiveContains("token"))
+    }
+
+    func testQuickConnectPayloadParsesBonfireApprovalURLWithServerSubpath() throws {
+        let payload = try JellyfinQuickConnectPayload(
+            url: URL(string: "https://flix.example/jellyfin/web/#/quickconnect?code=654321")!
+        )
+
+        XCTAssertEqual(payload.serverURL.absoluteString, "https://flix.example/jellyfin")
+        XCTAssertEqual(payload.code, "654321")
+        XCTAssertEqual(
+            try JellyfinQuickConnectPayload.code(from: payload.approvalURL.absoluteString),
+            "654321"
+        )
     }
 
     func testQuickConnectPayloadRejectsForeignSchemesAndInvalidCodes() {
         XCTAssertThrowsError(try JellyfinQuickConnectPayload(
             url: URL(string: "https://attacker.example/quick-connect?server=https://media.example.com&code=123456")!
+        ))
+        XCTAssertThrowsError(try JellyfinQuickConnectPayload(
+            url: URL(string: "https://media.example.com/web/#/home?code=123456")!
         ))
         XCTAssertThrowsError(try JellyfinQuickConnectPayload(
             serverURL: URL(string: "https://media.example.com")!,

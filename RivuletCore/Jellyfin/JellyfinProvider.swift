@@ -23,8 +23,8 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
     /// card UI never displays.
     private static let browseFields = [
         "BackdropImageTags", "ChildCount", "DateCreated", "Genres", "Overview",
-        "ParentId", "PremiereDate", "ProviderIds", "RecursiveItemCount", "SeriesId",
-        "Taglines", "Tags"
+        "ParentId", "PremiereDate", "ProviderIds", "RecursiveItemCount", "SeasonName",
+        "SeriesId", "SeriesName", "Taglines", "Tags"
     ].joined(separator: ",")
 
     /// The complete metadata set is fetched only after the user opens a title.
@@ -32,7 +32,7 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         "BackdropImageTags", "Chapters", "ChildCount", "DateCreated", "Genres",
         "MediaSources", "Overview", "ParentId", "Path", "People", "PremiereDate",
         "ProductionLocations", "ProviderIds", "RecursiveItemCount", "RemoteTrailers",
-        "SeriesId", "Studios", "Taglines", "Tags"
+        "SeasonName", "SeriesId", "SeriesName", "Studios", "Taglines", "Tags"
     ].joined(separator: ",")
 
     init(session: JellyfinAuthenticatedSession) throws {

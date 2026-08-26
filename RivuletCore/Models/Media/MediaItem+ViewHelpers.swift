@@ -52,4 +52,46 @@ extension MediaItem {
               let e = episodeNumber else { return nil }
         return "S\(String(format: "%02d", s))E\(String(format: "%02d", e))"
     }
+
+    /// Apple-style compact episode coordinates used in native detail and
+    /// playback surfaces. Unlike `episodeString`, this remains useful when a
+    /// backend supplies only one side of the hierarchy.
+    var episodeCoordinate: String? {
+        guard kind == .episode else { return nil }
+        switch (seasonNumber, episodeNumber) {
+        case let (season?, episode?): return "S\(season), E\(episode)"
+        case let (season?, nil): return season == 0 ? "Specials" : "Season \(season)"
+        case let (nil, episode?): return "Episode \(episode)"
+        case (nil, nil): return nil
+        }
+    }
+
+    /// The title shown above an episode name in player chrome and detail
+    /// pages, for example "Severance  ·  S2, E4".
+    var episodeHierarchyTitle: String? {
+        guard kind == .episode else { return nil }
+        return [seriesTitle, episodeCoordinate]
+            .compactMap { value in
+                guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !value.isEmpty else { return nil }
+                return value
+            }
+            .joined(separator: "  ·  ")
+            .nilIfEmpty
+    }
+
+    /// Season label that prefers the server's editorial name but falls back
+    /// to a stable native label.
+    var seasonDisplayTitle: String? {
+        if let seasonTitle = seasonTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !seasonTitle.isEmpty {
+            return seasonTitle
+        }
+        guard let seasonNumber else { return nil }
+        return seasonNumber == 0 ? "Specials" : "Season \(seasonNumber)"
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
