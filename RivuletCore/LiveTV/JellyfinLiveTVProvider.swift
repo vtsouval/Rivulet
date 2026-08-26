@@ -275,6 +275,19 @@ actor JellyfinLiveTVProvider: LiveTVProvider {
         }
     }
 
+    #if targetEnvironment(macCatalyst)
+    private static let playbackCapabilities = JellyfinPlaybackCapabilities(
+        allowsDirectPlay: false,
+        allowsRemux: true,
+        allowsTranscoding: true,
+        allowsVideoStreamCopy: true,
+        allowsAudioStreamCopy: true,
+        maxStreamingBitrate: 80_000_000,
+        maxVideoWidth: 3_840,
+        maxVideoHeight: 2_160,
+        maxAudioChannels: 8
+    )
+    #else
     private static let playbackCapabilities = JellyfinPlaybackCapabilities(
         allowsDirectPlay: true,
         allowsRemux: true,
@@ -286,6 +299,7 @@ actor JellyfinLiveTVProvider: LiveTVProvider {
         maxVideoHeight: 4_320,
         maxAudioChannels: 8
     )
+    #endif
 }
 
 private extension Array {

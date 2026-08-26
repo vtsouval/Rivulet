@@ -17,7 +17,18 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
     let catalogContext: JellyfinCatalogContext
     private let playbackPreparationCache = JellyfinPlaybackPreparationCache()
 
-    private static let catalogFields = [
+    /// Fields used while painting shelves and grids. Keep this payload small:
+    /// asking Jellyfin for people, chapters and every media source for dozens
+    /// of cards makes tunneled servers spend seconds serializing data that the
+    /// card UI never displays.
+    private static let browseFields = [
+        "BackdropImageTags", "ChildCount", "DateCreated", "Genres", "Overview",
+        "ParentId", "PremiereDate", "ProviderIds", "RecursiveItemCount", "SeriesId",
+        "Taglines", "Tags"
+    ].joined(separator: ",")
+
+    /// The complete metadata set is fetched only after the user opens a title.
+    private static let detailFields = [
         "BackdropImageTags", "Chapters", "ChildCount", "DateCreated", "Genres",
         "MediaSources", "Overview", "ParentId", "Path", "People", "PremiereDate",
         "ProductionLocations", "ProviderIds", "RecursiveItemCount", "RemoteTrailers",
@@ -159,7 +170,7 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         try await jellyfinCall {
             let dto: JellyfinBaseItemDTO = try await transport.get(
                 "/Users/\(session.user.id)/Items/\(itemRef.itemID)",
-                queryItems: [URLQueryItem(name: "Fields", value: Self.catalogFields)],
+                queryItems: [URLQueryItem(name: "Fields", value: Self.detailFields)],
                 token: session.accessToken
             )
             let nextEpisode = try await nextEpisodeIfNeeded(for: dto)
@@ -291,7 +302,9 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
             var ranked = JellyfinSourceSelector.best(
                 from: response.mediaSources,
                 capabilities: capabilities,
-                policy: JellyfinSourceSelectionPolicy(preferredSourceID: sourceID)
+                policy: JellyfinPlaybackPreferences.sourceSelectionPolicy(
+                    preferredSourceID: sourceID
+                )
             )
 
             // A source chosen after an unscoped detail request can have its own
@@ -318,7 +331,9 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
                     ranked = JellyfinSourceSelector.best(
                         from: response.mediaSources,
                         capabilities: capabilities,
-                        policy: JellyfinSourceSelectionPolicy(preferredSourceID: initial.source.id)
+                        policy: JellyfinPlaybackPreferences.sourceSelectionPolicy(
+                            preferredSourceID: initial.source.id
+                        )
                     )
                 }
             }
@@ -472,7 +487,7 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
     private var commonQueryItems: [URLQueryItem] {
         [
             URLQueryItem(name: "UserId", value: session.user.id),
-            URLQueryItem(name: "Fields", value: Self.catalogFields),
+            URLQueryItem(name: "Fields", value: Self.browseFields),
             URLQueryItem(name: "EnableImages", value: "true"),
             URLQueryItem(name: "EnableUserData", value: "true")
         ]
@@ -642,6 +657,22 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         ) as? Int
     }
 
+    #if targetEnvironment(macCatalyst)
+    /// Catalyst uses AVPlayer because the AetherEngine FFmpeg binaries do not
+    /// ship Catalyst slices. Ask Jellyfin for its Apple-compatible HLS route
+    /// rather than handing AVPlayer an arbitrary direct-play container.
+    private static let playbackCapabilities = JellyfinPlaybackCapabilities(
+        allowsDirectPlay: false,
+        allowsRemux: true,
+        allowsTranscoding: true,
+        allowsVideoStreamCopy: true,
+        allowsAudioStreamCopy: true,
+        maxStreamingBitrate: 80_000_000,
+        maxVideoWidth: 3_840,
+        maxVideoHeight: 2_160,
+        maxAudioChannels: 8
+    )
+    #else
     private static let playbackCapabilities = JellyfinPlaybackCapabilities(
         allowsDirectPlay: true,
         allowsRemux: true,
@@ -653,6 +684,7 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         maxVideoHeight: 4_320,
         maxAudioChannels: 8
     )
+    #endif
 }
 
 private extension SortOption {

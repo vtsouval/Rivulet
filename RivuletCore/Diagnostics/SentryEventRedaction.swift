@@ -44,7 +44,15 @@ nonisolated enum SentryEventRedaction {
             request.url = SensitiveDataRedactor.redactOptional(request.url)
             request.queryString = SensitiveDataRedactor.redactOptional(request.queryString)
             if let headers = request.headers {
-                request.headers = headers.mapValues { SensitiveDataRedactor.redact($0) }
+                let credentialHeaders = Set([
+                    "authorization", "proxy-authorization", "x-plex-token",
+                    "x-emby-token", "cookie", "set-cookie"
+                ])
+                request.headers = headers.reduce(into: [:]) { result, entry in
+                    result[entry.key] = credentialHeaders.contains(entry.key.lowercased())
+                        ? SensitiveDataRedactor.redactedValue
+                        : SensitiveDataRedactor.redact(entry.value)
+                }
             }
             // Cookies are credentials wholesale; never worth shipping.
             if request.cookies != nil {

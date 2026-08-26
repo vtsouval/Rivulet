@@ -44,6 +44,7 @@ nonisolated enum SensitiveDataRedactor {
         "api_key",
         "apikey",
         "access_token",
+        "secret",
     ]
 
     /// Matches `key=value` in a query string for any key in `secretQueryKeys`.

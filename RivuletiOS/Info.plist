@@ -26,9 +26,11 @@
 	<string>public.app-category.entertainment</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsArbitraryLoads</key>
+		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Use Face ID to unlock your Jellyfin profile and approve passkey sign-in.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Rivulet connects to playlist and guide servers on your local network.</string>
 	<key>UILaunchScreen</key>

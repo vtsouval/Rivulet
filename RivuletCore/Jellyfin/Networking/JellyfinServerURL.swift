@@ -18,7 +18,10 @@ nonisolated enum JellyfinServerURL {
         }
 
         if !candidate.contains("://") {
-            candidate = "http://\(candidate)"
+            // A missing scheme must never silently downgrade credentials to
+            // cleartext. Local HTTP remains available when the user types it
+            // explicitly for a private LAN Jellyfin instance.
+            candidate = "https://\(candidate)"
         }
 
         guard var components = URLComponents(string: candidate),
@@ -27,6 +30,11 @@ nonisolated enum JellyfinServerURL {
               components.host?.isEmpty == false,
               components.user == nil,
               components.password == nil else {
+            throw JellyfinAPIError.invalidServerURL
+        }
+
+        if scheme == "http", let host = components.host,
+           !allowsInsecureHTTP(to: host) {
             throw JellyfinAPIError.invalidServerURL
         }
 
@@ -55,5 +63,28 @@ nonisolated enum JellyfinServerURL {
 
     static func normalize(_ url: URL) throws -> URL {
         try normalize(url.absoluteString)
+    }
+
+    /// Cleartext is restricted to loopback, link-local and RFC1918/ULA hosts.
+    /// Public and DNS-hosted servers must use HTTPS because every Jellyfin API
+    /// request carries an access token after authentication.
+    private static func allowsInsecureHTTP(to host: String) -> Bool {
+        let normalized = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if normalized == "localhost" || normalized.hasSuffix(".local") || normalized == "::1" {
+            return true
+        }
+        if normalized.hasPrefix("fe80:") || normalized.hasPrefix("fc") || normalized.hasPrefix("fd") {
+            return true
+        }
+
+        let octets = normalized.split(separator: ".").compactMap { Int($0) }
+        guard octets.count == 4, octets.allSatisfy({ (0...255).contains($0) }) else {
+            return false
+        }
+        return octets[0] == 10
+            || octets[0] == 127
+            || (octets[0] == 169 && octets[1] == 254)
+            || (octets[0] == 172 && (16...31).contains(octets[1]))
+            || (octets[0] == 192 && octets[1] == 168)
     }
 }

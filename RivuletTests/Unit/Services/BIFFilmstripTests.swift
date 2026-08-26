@@ -49,6 +49,19 @@ final class BIFFilmstripTests: XCTestCase {
         XCTAssertNil(bif?.frameIndex(at: 5))
     }
 
+    func testMaximumFrameCountHeaderFailsClosedWithoutOverflow() {
+        var data = Data([0x89, 0x42, 0x49, 0x46, 0x0D, 0x0A, 0x1A, 0x0A])
+        func appendLE(_ value: UInt32) {
+            withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
+        }
+        appendLE(0)
+        appendLE(UInt32.max)
+        appendLE(1_000)
+        data.append(Data(repeating: 0, count: 44))
+
+        XCTAssertNil(BIFData(data: data))
+    }
+
     /// Same as `makeBIF`, but writes STRIDED timestamps: frame i's timestamp
     /// is `i * stride` instead of `i`. This mirrors real Plex BIFs seen in
     /// the field (e.g. 709 frames whose timestamps run 0,2,4,…,1416 with

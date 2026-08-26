@@ -7,17 +7,11 @@
 **A native tvOS video app for Jellyfin, Plex, and Live TV.**
 Built for simplicity.
 
-<a href="https://apps.apple.com/us/app/rivulet-for-plex/id6756892857">
-  <img src="https://img.shields.io/badge/Download_on_the-App_Store-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download on the App Store">
-</a>
-&nbsp;
-<a href="https://testflight.apple.com/join/TcCsF5As">
-  <img src="https://img.shields.io/badge/Join_the-TestFlight_Beta-0D96F6?style=for-the-badge&logo=apple&logoColor=white" alt="Join the TestFlight Beta">
-</a>
+<img src="https://img.shields.io/badge/personal_Jellyfin_fork-build_from_source-0D96F6?style=for-the-badge&logo=apple&logoColor=white" alt="Personal Jellyfin fork">
 
 <br><br>
 
-![tvOS 26+](https://img.shields.io/badge/tvOS-26+-000000?logo=apple)
+![Apple platforms](https://img.shields.io/badge/iOS%20%7C%20iPadOS%20%7C%20tvOS%20%7C%20macOS-26+-000000?logo=apple)
 ![Swift](https://img.shields.io/badge/Swift-6.0-FA7343?logo=swift&logoColor=white)
 ![License](https://img.shields.io/badge/license-PolyForm_NC_1.0.0-blue)
 ![Not for sale](https://img.shields.io/badge/⚠_not_for_sale-Noncommercial_only-red)
@@ -111,7 +105,7 @@ Chasing Plexamp on the features side. Long way to go.
 
 ## Requirements
 
-- Apple TV running tvOS 26 or later
+- iPhone/iPad running iOS or iPadOS 26+, Apple TV running tvOS 26+, or an Apple-silicon Mac running macOS 26+
 - Xcode 26+ for building
 - Jellyfin server (tested against 10.11.11)
 - Plex Media Server (for Plex features)
@@ -120,7 +114,7 @@ Chasing Plexamp on the features side. Long way to go.
 ## Building
 
 ```bash
-git clone https://github.com/l984-451/Rivulet.git
+git clone https://github.com/vtsouval/Rivulet.git
 cd Rivulet
 
 # One-time: both app targets read Secrets.swift and will not compile without it.
@@ -135,6 +129,9 @@ xcodebuild -scheme Rivulet -destination 'generic/platform=tvOS' build
 # The iOS/iPadOS app has its own scheme
 xcodebuild -scheme "Rivulet iOS" -destination 'generic/platform=iOS' build
 ```
+
+For signed device builds, macOS Catalyst, packaging, installation, free-team
+limitations, and passkey setup, see [Apple builds and installation](APPLE_BUILDS.md).
 
 ### Connecting Jellyfin
 

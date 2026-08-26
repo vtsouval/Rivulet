@@ -231,7 +231,7 @@ struct IOSPlexPlayerView: View {
                     Section("Media") {
                         LabeledContent("Title", value: request.item.displayTitle)
                         if let type = request.item.type { LabeledContent("Type", value: type.capitalized) }
-                        LabeledContent("Player", value: "AetherEngine")
+                        LabeledContent("Player", value: AetherPlayer.engineName)
                     }
                     if !request.markers.isEmpty {
                         Section("Skip markers") {

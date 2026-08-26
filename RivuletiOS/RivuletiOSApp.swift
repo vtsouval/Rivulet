@@ -35,10 +35,12 @@ struct RivuletiOSApp: App {
 
     var body: some Scene {
         WindowGroup {
-            IOSRootView()
-                .environmentObject(plex)
-                .environmentObject(jellyfin)
-                .environmentObject(navigation)
+            IOSAppLockGate {
+                IOSRootView()
+                    .environmentObject(plex)
+                    .environmentObject(jellyfin)
+                    .environmentObject(navigation)
+            }
         }
     }
 

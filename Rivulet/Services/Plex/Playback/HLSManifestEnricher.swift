@@ -85,16 +85,21 @@ final class HLSManifestEnricher: NSObject, AVAssetResourceLoaderDelegate, @unche
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
+            guard response.expectedContentLength <= 4 * 1024 * 1024,
+                  data.count <= 4 * 1024 * 1024 else {
+                loadingRequest.finishLoading(with: URLError(.dataLengthExceedsMaximum))
+                return
+            }
             guard let manifest = String(data: data, encoding: .utf8) else {
                 loadingRequest.finishLoading(with: URLError(.cannotDecodeContentData))
                 return
             }
 
             let patched = patchMasterPlaylist(manifest)
-            playerDebugLog("[HLSEnricher] Patched master playlist:")
-            for line in patched.components(separatedBy: "\n") where !line.isEmpty {
-                playerDebugLog("[HLSEnricher]   \(line)")
-            }
+            // Manifest URLs can contain working access tokens. Never print
+            // their contents, including in developer-signed Debug builds.
+            let lineCount = patched.split(whereSeparator: \.isNewline).count
+            playerDebugLog("[HLSEnricher] Patched master playlist (\(lineCount) lines)")
 
             let patchedData = patched.data(using: .utf8)!
             loadingRequest.dataRequest?.respond(with: patchedData)

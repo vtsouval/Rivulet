@@ -14,6 +14,7 @@
 //  `@preconcurrency import AVFoundation` onto the shipping tvOS build.
 //
 
+#if !targetEnvironment(macCatalyst)
 @preconcurrency import AVFoundation
 import Combine
 import CoreMedia
@@ -27,6 +28,8 @@ import AetherEngine
 /// for both Live TV and Plex VOD.
 @MainActor
 final class AetherPlayer: ObservableObject {
+    static let engineName = "AetherEngine"
+
     enum State: Equatable {
         case idle
         case loading
@@ -273,8 +276,8 @@ final class AetherPlayer: ObservableObject {
             preserveASSMarkup: true,
             probesize: 5 * 1024 * 1024,
             maxAnalyzeDuration: 5_000_000,
-            preferredAudioLanguages: [],
-            preferredSubtitleLanguages: [],
+            preferredAudioLanguages: Self.preferredAudioLanguages,
+            preferredSubtitleLanguages: Self.preferredSubtitleLanguages,
             teletextPage: Locale.current.region?.identifier == "AU" ? 801 : nil
         )
 
@@ -328,8 +331,8 @@ final class AetherPlayer: ObservableObject {
             preserveASSMarkup: true,
             probesize: 8 * 1024 * 1024,
             maxAnalyzeDuration: 8_000_000,
-            preferredAudioLanguages: [],
-            preferredSubtitleLanguages: [],
+            preferredAudioLanguages: Self.preferredAudioLanguages,
+            preferredSubtitleLanguages: Self.preferredSubtitleLanguages,
             teletextPage: nil
         )
 
@@ -403,6 +406,16 @@ final class AetherPlayer: ObservableObject {
 
     func unbind(view: AetherPlayerView) {
         engine.unbind(view: view)
+    }
+
+    private static var preferredAudioLanguages: [String] {
+        let value = UserDefaults.standard.string(forKey: "ios.preferredAudioLanguage") ?? "eng"
+        return value == "off" ? [] : [value]
+    }
+
+    private static var preferredSubtitleLanguages: [String] {
+        let value = UserDefaults.standard.string(forKey: "ios.preferredSubtitleLanguage") ?? "eng"
+        return value == "off" ? [] : [value]
     }
 
     private static func translate(_ state: PlaybackState) -> State {
@@ -750,3 +763,4 @@ struct AetherPlayerSurface: UIViewRepresentable {
         coordinator.player.unbind(view: uiView.engineView)
     }
 }
+#endif

@@ -171,6 +171,11 @@ final class PlexThumbnailService {
                 request.setValue(authToken, forHTTPHeaderField: "X-Plex-Token")
 
                 let (data, response) = try await session.data(for: request)
+                let maximumBIFBytes = 256 * 1024 * 1024
+                if response.expectedContentLength > Int64(maximumBIFBytes)
+                    || data.count > maximumBIFBytes {
+                    continue
+                }
 
                 guard let httpResponse = response as? HTTPURLResponse else {
                     print("⚠️ Not an HTTP response")
@@ -243,12 +248,7 @@ private class TrustingSessionDelegate: NSObject, URLSessionDelegate {
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-           let serverTrust = challenge.protectionSpace.serverTrust {
-            completionHandler(.useCredential, URLCredential(trust: serverTrust))
-        } else {
-            completionHandler(.performDefaultHandling, nil)
-        }
+        completionHandler(.performDefaultHandling, nil)
     }
 }
 
@@ -307,12 +307,20 @@ nonisolated struct BIFData: Sendable {
 
         // Read frame index
         let indexStart = 64
-        let indexEnd = indexStart + Int(frameCount + 1) * 8  // +1 for end marker
+        let count = Int(frameCount)
+        // The old UInt32 `frameCount + 1` wrapped at UInt32.max and could make
+        // a tiny malformed file pass the bounds check before an out-of-range
+        // load. Keep all arithmetic in Int and fail closed on impossible files.
+        guard count <= 1_000_000 else { return nil }
+        let (entryCount, addOverflow) = count.addingReportingOverflow(1)
+        let (tableBytes, multiplyOverflow) = entryCount.multipliedReportingOverflow(by: 8)
+        let (indexEnd, endOverflow) = indexStart.addingReportingOverflow(tableBytes)
+        guard !addOverflow, !multiplyOverflow, !endOverflow else { return nil }
 
         guard data.count >= indexEnd else { return nil }
 
         var frameInfos: [(timestamp: UInt32, offset: UInt32)] = []
-        for i in 0..<Int(frameCount) {
+        for i in 0..<count {
             let entryOffset = indexStart + i * 8
             let timestamp = data.withUnsafeBytes { ptr -> UInt32 in
                 ptr.load(fromByteOffset: entryOffset, as: UInt32.self).littleEndian
@@ -325,7 +333,7 @@ nonisolated struct BIFData: Sendable {
 
         // Read end marker for last frame size
         let endOffset = data.withUnsafeBytes { ptr -> UInt32 in
-            ptr.load(fromByteOffset: indexStart + Int(frameCount) * 8 + 4, as: UInt32.self).littleEndian
+            ptr.load(fromByteOffset: indexStart + count * 8 + 4, as: UInt32.self).littleEndian
         }
 
         // Extract frame data

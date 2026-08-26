@@ -564,7 +564,9 @@ class PlexAuthManager: ObservableObject {
             config.timeoutIntervalForRequest = 5.0
             config.timeoutIntervalForResource = 5.0
 
-            // Use a delegate that trusts self-signed certs for Plex
+            // Keep one short-lived session for this probe. Its delegate uses
+            // the system trust store; local addressing is never a substitute
+            // for certificate validation.
             let session = URLSession(configuration: config, delegate: PlexCertificateDelegate(), delegateQueue: nil)
             defer { session.invalidateAndCancel() }
 
@@ -725,6 +727,13 @@ class PlexAuthManager: ObservableObject {
         selectedServerToken = token
         // Note: We don't persist this to UserDefaults since it's session-specific
         // On next app launch, we'll fetch users again and switch if needed
+    }
+
+    /// Remove usable server authorization while a protected Plex Home profile
+    /// is waiting for its PIN. The account token remains in Keychain so a
+    /// successful profile switch can obtain a new scoped server token.
+    func lockServerAccessForProtectedProfile() {
+        selectedServerToken = nil
     }
 
     /// Check if currently authenticated (has valid credentials)
@@ -986,35 +995,13 @@ extension PlexAuthManager {
 
 // MARK: - Certificate Delegate for Connection Testing
 
-/// URLSession delegate that trusts self-signed certificates for Plex servers
+/// URLSession delegate retained for probe-session lifecycle symmetry.
 class PlexCertificateDelegate: NSObject, URLSessionDelegate {
     func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let serverTrust = challenge.protectionSpace.serverTrust else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-
-        let host = challenge.protectionSpace.host
-        let port = challenge.protectionSpace.port
-
-        // Trust self-signed certificates for:
-        // - IP addresses (local Plex servers)
-        // - plex.direct domains
-        // - Port 32400 (default Plex port)
-        let isIPAddress = host.range(of: #"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"#, options: .regularExpression) != nil
-        let isPlexDirect = host.hasSuffix(".plex.direct")
-        let isPlexPort = port == 32400
-
-        if isIPAddress || isPlexDirect || isPlexPort {
-            let credential = URLCredential(trust: serverTrust)
-            completionHandler(.useCredential, credential)
-        } else {
-            completionHandler(.performDefaultHandling, nil)
-        }
+        completionHandler(.performDefaultHandling, nil)
     }
 }

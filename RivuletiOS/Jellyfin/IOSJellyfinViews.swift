@@ -7,16 +7,15 @@ struct IOSJellyfinContainerView: View {
     @EnvironmentObject private var jellyfin: IOSJellyfinSession
 
     var body: some View {
-        switch jellyfin.state {
-        case .restoring:
+        if case .restoring = jellyfin.state {
             IOSJellyfinLaunchView()
-        case .signedOut:
-            IOSJellyfinSignInView()
-        case .connected:
+        } else if jellyfin.isConfigured {
             IOSJellyfinRootView()
-        case .connecting, .failed:
-            if jellyfin.isConfigured { IOSJellyfinRootView() }
-            else { IOSJellyfinSignInView() }
+        } else {
+            // Keep one stable sign-in view while the state moves through
+            // signedOut -> connecting -> failed. Replacing this branch used
+            // to trigger onDisappear and cancel authentication immediately.
+            IOSJellyfinSignInView()
         }
     }
 }
@@ -113,6 +112,13 @@ struct IOSJellyfinSignInView: View {
                         .controlSize(.large)
                         .disabled(isBusy || server.isEmpty)
 
+                    if IOSJellyfinPasskeyCoordinator.isAvailableInThisBuild {
+                        Button("Sign in with Passkey", systemImage: "person.badge.key.fill", action: passkey)
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+                            .disabled(isBusy || server.isEmpty)
+                    }
+
                     IOSBackendPicker()
                         .pickerStyle(.segmented)
                         .padding(.top, 8)
@@ -152,6 +158,18 @@ struct IOSJellyfinSignInView: View {
         operation = Task {
             defer { operation = nil }
             do { try await jellyfin.quickConnect(server: server) }
+            catch is CancellationError { }
+            catch { self.error = IOSJellyfinSession.message(for: error) }
+        }
+    }
+
+    private func passkey() {
+        guard operation == nil, !server.isEmpty else { return }
+        password = ""
+        error = nil
+        operation = Task {
+            defer { operation = nil }
+            do { try await jellyfin.passkeySignIn(server: server) }
             catch is CancellationError { }
             catch { self.error = IOSJellyfinSession.message(for: error) }
         }
@@ -319,6 +337,25 @@ private struct IOSJellyfinSettingsView: View {
                     Button("Refresh Jellyfin", systemImage: "arrow.clockwise") { Task { await jellyfin.refresh() } }
                     Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
                         Task { await jellyfin.signOut() }
+                    }
+                }
+                Section("Account security") {
+                    NavigationLink {
+                        IOSJellyfinSecuritySettingsView()
+                    } label: {
+                        Label(
+                            IOSJellyfinPasskeyCoordinator.isAvailableInThisBuild
+                                ? "Passkeys & Face ID"
+                                : "Face ID & App Lock",
+                            systemImage: "faceid"
+                        )
+                    }
+                }
+                Section("Preferences") {
+                    NavigationLink {
+                        IOSJellyfinPlaybackSettingsView()
+                    } label: {
+                        Label("Playback & languages", systemImage: "slider.horizontal.3")
                     }
                 }
                 Section("Playback") {

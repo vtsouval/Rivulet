@@ -9,6 +9,19 @@ struct IOSJellyfinPlaybackContext: Identifiable {
     let item: MediaItem
     let stream: StreamInfo
     let provider: JellyfinProvider
+    let followingEpisodes: [MediaItem]
+
+    init(
+        item: MediaItem,
+        stream: StreamInfo,
+        provider: JellyfinProvider,
+        followingEpisodes: [MediaItem] = []
+    ) {
+        self.item = item
+        self.stream = stream
+        self.provider = provider
+        self.followingEpisodes = followingEpisodes
+    }
 }
 
 struct IOSJellyfinPlayerView: View {
@@ -21,8 +34,20 @@ struct IOSJellyfinPlayerView: View {
     @State private var lastReportedSecond = -1
     @State private var captionStyle = CaptionAppearance.current()
     @State private var osdTop: CGFloat?
+    @State private var currentItem: MediaItem
+    @State private var currentStream: StreamInfo
+    @State private var episodeQueue: [MediaItem]
+    @State private var isAdvancing = false
+    @AppStorage("ios.autoplayNextEpisode") private var autoplayNextEpisode = true
     @AppStorage("playerSkipBackwardSeconds") private var skipBackwardSeconds = 10
     @AppStorage("playerSkipForwardSeconds") private var skipForwardSeconds = 30
+
+    init(context: IOSJellyfinPlaybackContext) {
+        self.context = context
+        _currentItem = State(initialValue: context.item)
+        _currentStream = State(initialValue: context.stream)
+        _episodeQueue = State(initialValue: context.followingEpisodes)
+    }
 
     var body: some View {
         ZStack {
@@ -45,7 +70,7 @@ struct IOSJellyfinPlayerView: View {
 
             if controlsVisible { chrome.transition(.opacity) }
             if shouldShowActivity {
-                ProgressView(player.isBuffering ? "Buffering…" : context.item.title)
+                ProgressView(player.isBuffering ? "Buffering…" : currentItem.title)
                     .tint(.white).foregroundStyle(.white).padding(16)
                     .background(.ultraThinMaterial, in: Capsule())
             }
@@ -57,6 +82,10 @@ struct IOSJellyfinPlayerView: View {
         .task { await load() }
         .onAppear { restartAutoHide() }
         .onChange(of: player.sourceTime) { _, value in reportProgressIfNeeded(value) }
+        .onChange(of: player.state) { _, state in
+            guard state == .ended, autoplayNextEpisode, !episodeQueue.isEmpty else { return }
+            Task { await playNextEpisode() }
+        }
         .onPreferenceChange(IOSPlayerRailTopPreferenceKey.self) { osdTop = $0 }
         .onReceive(NotificationCenter.default.publisher(for: CaptionAppearance.changedNotification)) { _ in
             captionStyle = CaptionAppearance.current()
@@ -66,7 +95,7 @@ struct IOSJellyfinPlayerView: View {
             autoHideTask?.cancel()
             let position = player.sourceTime
             player.stop()
-            let reporter = context.provider.progressReporter(for: context.item.ref, streamInfo: context.stream)
+            let reporter = context.provider.progressReporter(for: currentItem.ref, streamInfo: currentStream)
             Task { await reporter.stopped(at: position) }
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
@@ -82,10 +111,10 @@ struct IOSJellyfinPlayerView: View {
             .padding(.horizontal, 12).padding(.top, 8)
             Spacer()
             IOSPlayerGlassRail(
-                eyebrow: context.item.episodeString,
-                title: context.item.title,
+                eyebrow: currentItem.episodeString,
+                title: currentItem.title,
                 currentTime: player.sourceTime,
-                duration: max(context.stream.source.duration, player.duration),
+                duration: max(currentStream.source.duration, player.duration),
                 isSeekable: true,
                 centerControl: AnyView(
                     IOSPlayerControlButton(
@@ -102,6 +131,11 @@ struct IOSJellyfinPlayerView: View {
                 HStack(spacing: 4) {
                     IOSPlayerControlButton(title: "Subtitles", systemImage: subtitleIcon, compact: true, dense: true) { show(.subtitles) }
                     IOSPlayerControlButton(title: "Audio", systemImage: "waveform", compact: true, dense: true) { show(.audio) }
+                    if !episodeQueue.isEmpty {
+                        IOSPlayerControlButton(title: "Next", systemImage: "forward.end.fill", compact: true, dense: true) {
+                            Task { await playNextEpisode() }
+                        }
+                    }
                     IOSPlayerControlButton(title: "Info", systemImage: "info.circle", compact: true, dense: true) { show(.info) }
                 }
             }
@@ -138,10 +172,10 @@ struct IOSJellyfinPlayerView: View {
                         }
                     }
                 case .info:
-                    LabeledContent("Title", value: context.item.title)
-                    if let resolution = context.stream.source.videoResolution { LabeledContent("Quality", value: resolution.uppercased()) }
-                    if let container = context.stream.source.container { LabeledContent("Container", value: container.uppercased()) }
-                    LabeledContent("Player", value: "AetherEngine")
+                    LabeledContent("Title", value: currentItem.title)
+                    if let resolution = currentStream.source.videoResolution { LabeledContent("Quality", value: resolution.uppercased()) }
+                    if let container = currentStream.source.container { LabeledContent("Container", value: container.uppercased()) }
+                    LabeledContent("Player", value: AetherPlayer.engineName)
                 }
             }
             .navigationTitle(panel.title).navigationBarTitleDisplayMode(.inline)
@@ -178,24 +212,24 @@ struct IOSJellyfinPlayerView: View {
     private var subtitleIcon: String { player.currentSubtitleTrackId == nil ? "captions.bubble" : "captions.bubble.fill" }
 
     private func load() async {
-        guard let url = context.stream.source.streamURL else { return }
+        guard let url = currentStream.source.streamURL else { return }
         do {
             let audio = AVAudioSession.sharedInstance()
             try audio.setCategory(.playback, mode: .moviePlayback)
             try audio.setActive(true)
-            let reporter = context.provider.progressReporter(for: context.item.ref, streamInfo: context.stream)
+            let reporter = context.provider.progressReporter(for: currentItem.ref, streamInfo: currentStream)
             await reporter.start()
             try await player.load(
                 url: url,
-                headers: context.stream.requestHeaders,
-                startTime: context.item.userState.viewOffset > 0 ? context.item.userState.viewOffset : nil
+                headers: currentStream.requestHeaders,
+                startTime: currentItem.userState.viewOffset > 0 ? currentItem.userState.viewOffset : nil
             )
         } catch is CancellationError { }
         catch { }
     }
 
     private func togglePlayback() {
-        let reporter = context.provider.progressReporter(for: context.item.ref, streamInfo: context.stream)
+        let reporter = context.provider.progressReporter(for: currentItem.ref, streamInfo: currentStream)
         if isPlaying {
             player.pause(); Task { await reporter.paused(at: player.sourceTime) }
         } else {
@@ -205,7 +239,7 @@ struct IOSJellyfinPlayerView: View {
     }
 
     private func seek(by delta: TimeInterval) {
-        let duration = max(context.stream.source.duration, player.duration)
+        let duration = max(currentStream.source.duration, player.duration)
         Task { await player.seek(to: min(max(player.sourceTime + delta, 0), max(duration, 0))) }
         restartAutoHide()
     }
@@ -214,8 +248,30 @@ struct IOSJellyfinPlayerView: View {
         let second = Int(value)
         guard second > 0, second % 10 == 0, second != lastReportedSecond else { return }
         lastReportedSecond = second
-        let reporter = context.provider.progressReporter(for: context.item.ref, streamInfo: context.stream)
+        let reporter = context.provider.progressReporter(for: currentItem.ref, streamInfo: currentStream)
         Task { await reporter.progress(position: value) }
+    }
+
+    private func playNextEpisode() async {
+        guard !isAdvancing, let next = episodeQueue.first else { return }
+        isAdvancing = true
+        defer { isAdvancing = false }
+        let finishedReporter = context.provider.progressReporter(
+            for: currentItem.ref,
+            streamInfo: currentStream
+        )
+        await finishedReporter.stopped(at: max(player.sourceTime, currentStream.source.duration))
+        do {
+            let stream = try await context.provider.resolveStream(for: next.ref, sourceID: nil)
+            player.stop()
+            episodeQueue.removeFirst()
+            currentItem = next
+            currentStream = stream
+            lastReportedSecond = -1
+            await load()
+        } catch {
+            player.stop()
+        }
     }
 
     private func show(_ panel: Panel) { autoHideTask?.cancel(); self.panel = panel }

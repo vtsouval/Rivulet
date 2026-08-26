@@ -32,7 +32,7 @@ nonisolated enum JellyfinAPIError: Error, Equatable, LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .invalidServerURL:
-            return "Enter a valid HTTP or HTTPS Jellyfin server address."
+            return "Enter an HTTPS Jellyfin address, or explicit HTTP for a private local server."
         case .invalidResponse:
             return "The Jellyfin server returned an invalid response."
         case .unauthorized(let message):
@@ -171,6 +171,7 @@ actor JellyfinTransport {
         method: JellyfinHTTPMethod,
         queryItems: [URLQueryItem] = [],
         token: String? = nil,
+        headers: [String: String] = [:],
         body: (any Encodable & Sendable)? = nil
     ) async throws -> Response {
         try Task.checkCancellation()
@@ -191,6 +192,9 @@ actor JellyfinTransport {
         request.setValue(clientIdentity.authorizationHeader(token: token), forHTTPHeaderField: "Authorization")
         if encodedBody != nil {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        for (name, value) in headers {
+            request.setValue(value, forHTTPHeaderField: name)
         }
 
         let data: Data
@@ -215,6 +219,13 @@ actor JellyfinTransport {
         guard (200...299).contains(httpResponse.statusCode) else {
             throw Self.httpError(statusCode: httpResponse.statusCode, data: data)
         }
+        guard httpResponse.expectedContentLength <= 64 * 1024 * 1024,
+              data.count <= 64 * 1024 * 1024 else {
+            throw JellyfinAPIError.http(
+                statusCode: 413,
+                message: "The Jellyfin response exceeded the safe client limit."
+            )
+        }
 
         if data.isEmpty, Response.self == JellyfinEmptyResponse.self,
            let empty = JellyfinEmptyResponse() as? Response {
@@ -234,9 +245,17 @@ actor JellyfinTransport {
         method: JellyfinHTTPMethod,
         queryItems: [URLQueryItem] = [],
         token: String? = nil,
+        headers: [String: String] = [:],
         body: (any Encodable & Sendable)? = nil
     ) async throws -> JellyfinEmptyResponse {
-        try await request(path, method: method, queryItems: queryItems, token: token, body: body)
+        try await request(
+            path,
+            method: method,
+            queryItems: queryItems,
+            token: token,
+            headers: headers,
+            body: body
+        )
     }
 
     private func endpointURL(path: String, queryItems: [URLQueryItem]) throws -> URL {

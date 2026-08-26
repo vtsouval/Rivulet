@@ -13,7 +13,7 @@ workflows:
       vars:
         XCODE_SCHEME: "Rivulet"
         XCODE_PROJECT: "Rivulet.xcodeproj"
-        BUNDLE_ID: "com.gstudios.rivulet"
+        BUNDLE_ID: "com.vtsouval.jellyplugs.rivulet"
         APP_STORE_APPLE_ID: 6756892857
       xcode: latest
 
@@ -123,7 +123,10 @@ workflows:
             echo "No SENTRY_AUTH_TOKEN set, skipping dSYM upload."
             exit 0
           fi
-          which sentry-cli >/dev/null 2>&1 || curl -sL https://sentry.io/get-cli/ | bash
+          if ! command -v sentry-cli >/dev/null 2>&1; then
+            echo "sentry-cli is not preinstalled; skipping dSYM upload rather than executing a remote installer."
+            exit 0
+          fi
           sentry-cli debug-files upload \
             --auth-token "$SENTRY_AUTH_TOKEN" \
             --org "$SENTRY_ORG" \
@@ -180,7 +183,7 @@ workflows:
       vars:
         XCODE_SCHEME: "Rivulet iOS"
         XCODE_PROJECT: "Rivulet.xcodeproj"
-        BUNDLE_ID: "com.gstudios.rivulet"
+        BUNDLE_ID: "com.vtsouval.jellyplugs.rivulet"
         APP_STORE_APPLE_ID: 6756892857
       xcode: latest
 
@@ -281,7 +284,10 @@ workflows:
             echo "No SENTRY_AUTH_TOKEN set, skipping dSYM upload."
             exit 0
           fi
-          which sentry-cli >/dev/null 2>&1 || curl -sL https://sentry.io/get-cli/ | bash
+          if ! command -v sentry-cli >/dev/null 2>&1; then
+            echo "sentry-cli is not preinstalled; skipping dSYM upload rather than executing a remote installer."
+            exit 0
+          fi
           sentry-cli debug-files upload \
             --auth-token "$SENTRY_AUTH_TOKEN" \
             --org "$SENTRY_ORG" \

@@ -24,7 +24,7 @@ final class JellyfinAuthTransportTests: XCTestCase {
 
     func testServerURLAddsSchemeAndRemovesWebClientRoute() throws {
         let url = try JellyfinServerURL.normalize("  media.example.com:8096/jellyfin/web/#/home  ")
-        XCTAssertEqual(url.absoluteString, "http://media.example.com:8096/jellyfin")
+        XCTAssertEqual(url.absoluteString, "https://media.example.com:8096/jellyfin")
     }
 
     func testServerURLPreservesReverseProxySubpathAndDropsQuery() throws {
@@ -35,6 +35,18 @@ final class JellyfinAuthTransportTests: XCTestCase {
     func testServerURLRejectsUnsupportedSchemeAndCredentials() {
         XCTAssertThrowsError(try JellyfinServerURL.normalize("ftp://media.example.com"))
         XCTAssertThrowsError(try JellyfinServerURL.normalize("https://user:password@media.example.com"))
+        XCTAssertThrowsError(try JellyfinServerURL.normalize("http://media.example.com"))
+    }
+
+    func testServerURLAllowsExplicitHTTPOnlyForPrivateHosts() throws {
+        XCTAssertEqual(
+            try JellyfinServerURL.normalize("http://192.168.2.203:8096").absoluteString,
+            "http://192.168.2.203:8096"
+        )
+        XCTAssertEqual(
+            try JellyfinServerURL.normalize("http://jellyfin.local:8096").absoluteString,
+            "http://jellyfin.local:8096"
+        )
     }
 
     func testAuthorizationHeaderIncludesClientMetadataAndOptionalToken() {
@@ -248,6 +260,93 @@ final class JellyfinAuthTransportTests: XCTestCase {
             // Expected.
         }
         XCTAssertTrue(JellyfinTestURLProtocol.requests().isEmpty)
+    }
+
+    func testPasskeyStatusAndAuthenticationOptionsUseExpectedContract() async throws {
+        JellyfinTestURLProtocol.enqueueJSON(
+            path: "/plugins/profiles/passkeys/status",
+            json: [
+                "Enabled": true,
+                "HasPasskey": true,
+                "Count": 2,
+                "Origin": "https://media.example.com"
+            ]
+        )
+        JellyfinTestURLProtocol.enqueueJSON(
+            path: "/plugins/profiles/passkeys/authenticate/options",
+            json: [
+                "TransactionId": "transaction-1",
+                "ExpiresInSeconds": 120,
+                "PublicKey": [
+                    "challenge": "Y2hhbGxlbmdl",
+                    "timeout": 120_000,
+                    "rpId": "media.example.com",
+                    "allowCredentials": [],
+                    "userVerification": "required"
+                ]
+            ]
+        )
+
+        let transport = try makeClient().transport
+        let passkeys = JellyfinPasskeyClient(transport: transport)
+        let status = try await passkeys.status(userID: "user-1")
+        let ceremony = try await passkeys.beginAuthentication(
+            userID: "user-1",
+            origin: "https://media.example.com/"
+        )
+
+        XCTAssertTrue(status.enabled)
+        XCTAssertTrue(status.hasPasskey)
+        XCTAssertEqual(status.count, 2)
+        XCTAssertEqual(ceremony.transactionId, "transaction-1")
+        XCTAssertEqual(ceremony.publicKey.rpId, "media.example.com")
+
+        let requests = JellyfinTestURLProtocol.requests()
+        XCTAssertEqual(
+            URLComponents(url: requests[0].url!, resolvingAgainstBaseURL: false)?.queryItems,
+            [URLQueryItem(name: "userId", value: "user-1")]
+        )
+        XCTAssertEqual(requests[1].value(forHTTPHeaderField: "Origin"), "https://media.example.com")
+        let body = try XCTUnwrap(requests[1].httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(json, ["userId": "user-1"])
+    }
+
+    func testPasskeyAuthenticationRejectsNonHTTPSOriginBeforeNetwork() async throws {
+        let passkeys = JellyfinPasskeyClient(transport: try makeClient().transport)
+        do {
+            _ = try await passkeys.beginAuthentication(
+                userID: "user-1",
+                origin: "http://media.example.com"
+            )
+            XCTFail("Expected insecure passkey origin to be rejected")
+        } catch let error as JellyfinAPIError {
+            guard case .forbidden = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+        XCTAssertTrue(JellyfinTestURLProtocol.requests().isEmpty)
+    }
+
+    func testPasskeyAuthenticationRejectsCrossOriginBeforeNetwork() async throws {
+        let passkeys = JellyfinPasskeyClient(transport: try makeClient().transport)
+        do {
+            _ = try await passkeys.beginAuthentication(
+                userID: "user-1",
+                origin: "https://attacker.example"
+            )
+            XCTFail("Expected cross-origin passkey ceremony to be rejected")
+        } catch let error as JellyfinAPIError {
+            guard case .forbidden = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+        XCTAssertTrue(JellyfinTestURLProtocol.requests().isEmpty)
+    }
+
+    func testPasskeyCredentialUsesUnpaddedBase64URL() {
+        XCTAssertEqual(Data([0xfb, 0xff, 0x00]).jellyfinBase64URLString, "-_8A")
+        XCTAssertEqual("-_8A".jellyfinBase64URLData, Data([0xfb, 0xff, 0x00]))
     }
 
     private func makeClient(serverURL: String = "https://media.example.com") throws -> JellyfinAuthClient {

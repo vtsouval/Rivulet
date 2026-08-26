@@ -89,7 +89,7 @@ final class IOSJellyfinSession: ObservableObject {
             try await JellyfinSessionStore.shared.persist(session)
             UserDefaults.standard.set(session.serverURL.absoluteString, forKey: "jellyfin.lastServerURL")
             try attach(session)
-            await refresh()
+            refreshAfterAuthentication()
         } catch {
             state = .failed(Self.message(for: error))
             throw error
@@ -125,12 +125,101 @@ final class IOSJellyfinSession: ObservableObject {
             UserDefaults.standard.set(session.serverURL.absoluteString, forKey: "jellyfin.lastServerURL")
             quickConnectCode = nil
             try attach(session)
-            await refresh()
+            refreshAfterAuthentication()
         } catch {
             quickConnectCode = nil
             state = .failed(Self.message(for: error))
             throw error
         }
+    }
+
+    func passkeySignIn(server: String) async throws {
+        state = .connecting
+        quickConnectCode = nil
+        do {
+            let transport = try JellyfinTransport(
+                serverURL: server,
+                clientIdentity: JellyfinSessionStore.clientIdentity()
+            )
+            let client = JellyfinPasskeyClient(transport: transport)
+            let status = try await client.status()
+            guard status.enabled, let reportedOrigin = status.origin else {
+                throw JellyfinAPIError.forbidden(
+                    message: "Passkey sign-in is not configured on this Jellyfin server."
+                )
+            }
+            let originURL = try client.validatedOrigin(reportedOrigin)
+            guard let relyingPartyID = originURL.host else {
+                throw JellyfinAPIError.invalidServerURL
+            }
+            let origin = originURL.absoluteString
+            let ceremony = try await client.beginAuthentication(origin: origin)
+            let credential = try await IOSJellyfinPasskeyCoordinator.shared.assertion(
+                options: ceremony.publicKey,
+                fallbackRelyingPartyID: relyingPartyID
+            )
+            let session = try await client.completeAuthentication(
+                transactionID: ceremony.transactionId,
+                credential: credential,
+                origin: origin
+            )
+            try await JellyfinSessionStore.shared.persist(session)
+            UserDefaults.standard.set(session.serverURL.absoluteString, forKey: "jellyfin.lastServerURL")
+            try attach(session)
+            refreshAfterAuthentication()
+        } catch {
+            state = .failed(Self.message(for: error))
+            throw error
+        }
+    }
+
+    func passkeyStatus() async throws -> JellyfinPasskeyStatus {
+        let context = try passkeyContext()
+        return try await context.client.status(userID: context.session.user.id)
+    }
+
+    func passkeyRecords() async throws -> [JellyfinPasskeyRecord] {
+        let context = try passkeyContext()
+        return try await context.client.records(accessToken: context.session.accessToken)
+    }
+
+    func enrollPasskey(currentPassword: String, name: String) async throws {
+        let context = try passkeyContext()
+        let status = try await context.client.status(userID: context.session.user.id)
+        guard status.enabled, let reportedOrigin = status.origin else {
+            throw JellyfinAPIError.forbidden(
+                message: "Passkeys are not configured on this Jellyfin server."
+            )
+        }
+        let originURL = try context.client.validatedOrigin(reportedOrigin)
+        guard let relyingPartyID = originURL.host else {
+            throw JellyfinAPIError.invalidServerURL
+        }
+        let origin = originURL.absoluteString
+        let ceremony = try await context.client.beginRegistration(
+            currentPassword: currentPassword,
+            name: name,
+            origin: origin,
+            accessToken: context.session.accessToken
+        )
+        let credential = try await IOSJellyfinPasskeyCoordinator.shared.registration(
+            options: ceremony.publicKey,
+            fallbackRelyingPartyID: relyingPartyID
+        )
+        try await context.client.completeRegistration(
+            transactionID: ceremony.transactionId,
+            credential: credential,
+            origin: origin,
+            accessToken: context.session.accessToken
+        )
+    }
+
+    func removePasskey(_ record: JellyfinPasskeyRecord) async throws {
+        let context = try passkeyContext()
+        try await context.client.remove(
+            recordID: record.id,
+            accessToken: context.session.accessToken
+        )
     }
 
     func signOut() async {
@@ -170,7 +259,7 @@ final class IOSJellyfinSession: ObservableObject {
         let result = try await provider.items(
             in: library,
             sort: .addedAtDesc,
-            page: Page(offset: 0, limit: 120)
+            page: Page(offset: 0, limit: 72)
         )
         libraryCache[library.id] = result.items
         return result.items
@@ -246,22 +335,47 @@ final class IOSJellyfinSession: ObservableObject {
         state = .connected
     }
 
+    /// Hand control to the signed-in UI immediately and hydrate home data in
+    /// an independent task. This prevents the sign-in view's disappearance
+    /// from cancelling the refresh that follows a successful login.
+    private func refreshAfterAuthentication() {
+        Task(priority: .userInitiated) { [weak self] in
+            await self?.refresh()
+        }
+    }
+
+    private func passkeyContext() throws -> (
+        client: JellyfinPasskeyClient,
+        session: JellyfinAuthenticatedSession
+    ) {
+        guard let session = JellyfinSessionStore.shared.currentSession else {
+            throw MediaProviderError.unauthorized
+        }
+        let transport = try JellyfinTransport(
+            serverURL: session.serverURL,
+            clientIdentity: session.clientIdentity
+        )
+        return (JellyfinPasskeyClient(transport: transport), session)
+    }
+
     private func prefetch(libraries: [MediaLibrary]) async {
-        await withTaskGroup(of: (String, [MediaItem]?).self) { group in
-            for library in libraries.prefix(5) where libraryCache[library.id] == nil {
-                guard let provider else { continue }
-                group.addTask {
-                    let value = try? await provider.items(
-                        in: library,
-                        sort: .addedAtDesc,
-                        page: Page(offset: 0, limit: 120)
-                    )
-                    return (library.id, value?.items)
-                }
-            }
-            for await (id, items) in group {
-                if let items { libraryCache[id] = items }
-            }
+        guard let provider else { return }
+        let candidates = libraries.filter {
+            $0.kind == .movies || $0.kind == .shows || $0.kind == .mixed
+        }.prefix(2)
+
+        // Warm only the two primary media libraries and do so sequentially.
+        // Concurrent recursive scans of Live TV, playlists and collections can
+        // monopolize a remote Jellyfin server and delay the foreground tap.
+        for library in candidates where libraryCache[library.id] == nil {
+            guard !Task.isCancelled else { return }
+            let value = try? await provider.items(
+                in: library,
+                sort: .addedAtDesc,
+                page: Page(offset: 0, limit: 72)
+            )
+            if let items = value?.items { libraryCache[library.id] = items }
+            await Task.yield()
         }
     }
 

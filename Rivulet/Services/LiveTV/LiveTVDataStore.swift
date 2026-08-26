@@ -100,6 +100,18 @@ class LiveTVDataStore: ObservableObject {
     private let favoritesKey = "liveTVFavoriteChannelIds"
     private let sourcesKey = "liveTVSourceConfigurations"
 
+    private func dispatcharrTokenKey(for sourceID: String) -> String {
+        "liveTV.dispatcharr.apiToken.\(sourceID.sha256Hash())"
+    }
+
+    private func m3uURLKey(for sourceID: String) -> String {
+        "liveTV.m3u.url.\(sourceID.sha256Hash())"
+    }
+
+    private func epgURLKey(for sourceID: String) -> String {
+        "liveTV.epg.url.\(sourceID.sha256Hash())"
+    }
+
     // MARK: - Source Configuration (Persistable)
 
     struct SourceConfiguration: Codable {
@@ -277,13 +289,16 @@ class LiveTVDataStore: ObservableObject {
             channelProfile: channelProfile
         )
         providers[sourceId] = provider
+        if let apiToken, !apiToken.isEmpty {
+            _ = KeychainHelper.set(apiToken, forKey: dispatcharrTokenKey(for: sourceId))
+        }
         saveSources()
         await updateSourceInfo()
     }
 
     /// Add a generic M3U source
     func addM3USource(m3uURL: URL, epgURL: URL?, name: String) async {
-        let sourceId = "m3u:\(m3uURL.absoluteString)"
+        let sourceId = "m3u:\(m3uURL.absoluteString.sha256Hash())"
         let provider = IPTVProvider(
             m3uURL: m3uURL,
             epgURL: epgURL,
@@ -291,6 +306,10 @@ class LiveTVDataStore: ObservableObject {
             displayName: name
         )
         providers[sourceId] = provider
+        _ = KeychainHelper.set(m3uURL.absoluteString, forKey: m3uURLKey(for: sourceId))
+        if let epgURL {
+            _ = KeychainHelper.set(epgURL.absoluteString, forKey: epgURLKey(for: sourceId))
+        }
         saveSources()
         await updateSourceInfo()
     }
@@ -322,6 +341,9 @@ class LiveTVDataStore: ObservableObject {
     /// Remove a source by ID
     func removeSource(id: String) async {
         providers.removeValue(forKey: id)
+        KeychainHelper.delete(dispatcharrTokenKey(for: id))
+        KeychainHelper.delete(m3uURLKey(for: id))
+        KeychainHelper.delete(epgURLKey(for: id))
         saveSources()
         await updateSourceInfo()
 
@@ -346,30 +368,49 @@ class LiveTVDataStore: ObservableObject {
             return
         }
 
+        var migratedSecrets = false
         for config in configs {
             switch config.type {
             case "dispatcharr":
                 if let urlString = config.baseURL, let url = URL(string: urlString) {
+                    let tokenKey = dispatcharrTokenKey(for: config.id)
+                    let token = KeychainHelper.get(tokenKey) ?? config.apiToken
+                    if let legacyToken = config.apiToken, !legacyToken.isEmpty {
+                        _ = KeychainHelper.set(legacyToken, forKey: tokenKey)
+                        migratedSecrets = true
+                    }
                     let provider = IPTVProvider(
                         dispatcharrURL: url,
                         sourceId: config.id,
                         displayName: config.name,
-                        apiToken: config.apiToken,
+                        apiToken: token,
                         channelProfile: config.channelProfile
                     )
                     providers[config.id] = provider
                 }
 
             case "m3u":
-                if let m3uString = config.m3uURL, let m3uURL = URL(string: m3uString) {
-                    let epgURL = config.epgURL.flatMap { URL(string: $0) }
+                let storedM3U = KeychainHelper.get(m3uURLKey(for: config.id)) ?? config.m3uURL
+                if let m3uString = storedM3U, let m3uURL = URL(string: m3uString) {
+                    let restoredID = config.id.contains("://")
+                        ? "m3u:\(m3uString.sha256Hash())"
+                        : config.id
+                    let storedEPG = KeychainHelper.get(epgURLKey(for: config.id)) ?? config.epgURL
+                    let epgURL = storedEPG.flatMap { URL(string: $0) }
+                    _ = KeychainHelper.set(m3uString, forKey: m3uURLKey(for: restoredID))
+                    if let storedEPG {
+                        _ = KeychainHelper.set(storedEPG, forKey: epgURLKey(for: restoredID))
+                    }
+                    if config.m3uURL != nil || config.epgURL != nil || restoredID != config.id {
+                        migratedSecrets = true
+                    }
                     let provider = IPTVProvider(
                         m3uURL: m3uURL,
                         epgURL: epgURL,
-                        sourceId: config.id,
+                        sourceId: restoredID,
                         displayName: config.name
                     )
-                    providers[config.id] = provider
+                    providers[restoredID] = provider
                 }
 
             case "plex":
@@ -401,6 +442,10 @@ class LiveTVDataStore: ObservableObject {
             }
         }
 
+        if migratedSecrets {
+            saveSources()
+        }
+
         // Update source info (async but we don't wait)
         Task {
             await updateSourceInfo()
@@ -415,6 +460,9 @@ class LiveTVDataStore: ObservableObject {
             switch provider.sourceType {
             case .dispatcharr:
                 if let iptvProvider = provider as? IPTVProvider {
+                    if let token = iptvProvider.apiToken, !token.isEmpty {
+                        _ = KeychainHelper.set(token, forKey: dispatcharrTokenKey(for: id))
+                    }
                     configs.append(SourceConfiguration(
                         id: id,
                         type: "dispatcharr",
@@ -422,20 +470,29 @@ class LiveTVDataStore: ObservableObject {
                         baseURL: iptvProvider.baseURL?.absoluteString,
                         m3uURL: nil,
                         epgURL: nil,
-                        apiToken: iptvProvider.apiToken,
+                        // Secrets are persisted only in Keychain. Keeping the
+                        // optional field nil also migrates older defaults the
+                        // next time this array is saved.
+                        apiToken: nil,
                         channelProfile: iptvProvider.channelProfile
                     ))
                 }
 
             case .genericM3U:
                 if let iptvProvider = provider as? IPTVProvider {
+                    if let m3uURL = iptvProvider.m3uURL {
+                        _ = KeychainHelper.set(m3uURL.absoluteString, forKey: m3uURLKey(for: id))
+                    }
+                    if let epgURL = iptvProvider.epgURL {
+                        _ = KeychainHelper.set(epgURL.absoluteString, forKey: epgURLKey(for: id))
+                    }
                     configs.append(SourceConfiguration(
                         id: id,
                         type: "m3u",
                         name: provider.displayName,
                         baseURL: nil,
-                        m3uURL: iptvProvider.m3uURL?.absoluteString,
-                        epgURL: iptvProvider.epgURL?.absoluteString,
+                        m3uURL: nil,
+                        epgURL: nil,
                         apiToken: nil
                     ))
                 }

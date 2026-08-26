@@ -295,9 +295,12 @@ class PlexUserProfileManager: ObservableObject {
                 }
             }
 
-            // For protected users without remembered PIN or if switch failed, just set locally
-            // They'll need to re-enter PIN if they want their specific content
+            // Reflect the intended profile in the picker, but do not leave the
+            // previous/admin server token usable behind a protected identity.
+            // Playback remains locked until selectUser obtains a token after a
+            // valid PIN ceremony.
             selectedUser = savedUser
+            PlexAuthManager.shared.lockServerAccessForProtectedProfile()
             return
         }
 

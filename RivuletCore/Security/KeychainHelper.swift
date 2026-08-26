@@ -9,11 +9,16 @@
 //
 
 import Foundation
+import OSLog
 import Security
 
 enum KeychainHelper {
 
     private static let service = "com.rivulet.plex"
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Rivulet",
+        category: "Keychain"
+    )
 
     // MARK: - Public API
 
@@ -52,10 +57,19 @@ enum KeychainHelper {
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            // Credentials stay device-bound and never migrate to another
+            // device. After-first-unlock availability is required by tvOS and
+            // by background refresh while the screen is asleep; the app-level
+            // biometric gate still protects interactive access on iOS/macOS.
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
 
         let status = SecItemAdd(query as CFDictionary, nil)
+        if status != errSecSuccess {
+            // An OSStatus contains no credential material and is safe to keep
+            // in diagnostics. Never log the key or value here.
+            logger.error("SecItemAdd failed with OSStatus \(status, privacy: .public)")
+        }
         return status == errSecSuccess
     }
 

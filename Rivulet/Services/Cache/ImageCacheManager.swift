@@ -61,6 +61,7 @@ actor ImageCacheManager: NSObject {
     private let maxKeyCacheCount = 2048
     private let maxDiskCacheSize: Int64 = 5 * 1024 * 1024 * 1024  // 5GB
     private let defaultTTL: TimeInterval = 14 * 24 * 60 * 60  // 2 weeks
+    private let maximumImageBytes = 32 * 1024 * 1024
 
     // MARK: - Caches
 
@@ -318,6 +319,10 @@ actor ImageCacheManager: NSObject {
 
                     let status = httpResponse.statusCode
                     if status == 200 {
+                        guard httpResponse.expectedContentLength <= Int64(self.maximumImageBytes),
+                              data.count <= self.maximumImageBytes else {
+                            return nil
+                        }
                         // Validate image data is complete before caching. Incomplete or
                         // corrupt bytes are treated as a transient failure (retryable).
                         guard let imageSource = CGImageSourceCreateWithData(data as CFData, nil),
@@ -370,7 +375,9 @@ actor ImageCacheManager: NSObject {
 
             // Update metadata
             let entry = ImageCacheEntry(
-                url: url.absoluteString,
+                // Metadata is diagnostic only. Keep the origin/path but never
+                // persist access-token or IPTV credential query values.
+                url: SensitiveDataRedactor.safeURLString(url),
                 cachedAt: Date(),
                 lastAccessedAt: Date(),
                 fileSize: Int64(data.count)
@@ -438,8 +445,21 @@ actor ImageCacheManager: NSObject {
             return
         }
 
-        cacheMetadata = decoded
+        var migrated = false
+        cacheMetadata = decoded.mapValues { entry in
+            guard let url = URL(string: entry.url) else { return entry }
+            let safeURL = SensitiveDataRedactor.safeURLString(url)
+            guard safeURL != entry.url else { return entry }
+            migrated = true
+            return ImageCacheEntry(
+                url: safeURL,
+                cachedAt: entry.cachedAt,
+                lastAccessedAt: entry.lastAccessedAt,
+                fileSize: entry.fileSize
+            )
+        }
         metadataLoaded = true
+        if migrated { saveMetadata() }
     }
 
     private func saveMetadata() {
@@ -529,34 +549,12 @@ actor ImageCacheManager: NSObject {
 // MARK: - URLSessionDelegate (SSL Certificate Handling)
 
 extension ImageCacheManager: URLSessionDelegate {
-    /// Handle SSL certificate challenges for self-signed certificates (same as PlexNetworkManager)
+    /// Image responses receive the same system TLS validation as API calls.
     nonisolated func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let serverTrust = challenge.protectionSpace.serverTrust else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-
-        let host = challenge.protectionSpace.host
-        let port = challenge.protectionSpace.port
-
-        // Trust self-signed certificates for:
-        // - IP addresses (local Plex servers)
-        // - plex.direct domains
-        // - Port 32400 (default Plex port)
-        let isIPAddress = host.range(of: #"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"#, options: .regularExpression) != nil
-        let isPlexDirect = host.hasSuffix(".plex.direct")
-        let isPlexPort = port == 32400
-
-        if isIPAddress || isPlexDirect || isPlexPort {
-            let credential = URLCredential(trust: serverTrust)
-            completionHandler(.useCredential, credential)
-        } else {
-            completionHandler(.performDefaultHandling, nil)
-        }
+        completionHandler(.performDefaultHandling, nil)
     }
 }

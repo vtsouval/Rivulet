@@ -247,7 +247,19 @@ struct IOSJellyfinDetailView: View {
         do {
             let stream = try await jellyfin.resolve(item)
             guard let provider = jellyfin.provider else { throw MediaProviderError.unauthorized }
-            playback = IOSJellyfinPlaybackContext(item: item, stream: stream, provider: provider)
+            let orderedEpisodes = EpisodePicker.inPlaybackOrder(episodes)
+            let following: [MediaItem]
+            if let index = orderedEpisodes.firstIndex(where: { $0.id == item.id }) {
+                following = Array(orderedEpisodes.dropFirst(index + 1))
+            } else {
+                following = []
+            }
+            playback = IOSJellyfinPlaybackContext(
+                item: item,
+                stream: stream,
+                provider: provider,
+                followingEpisodes: following
+            )
         } catch { self.error = IOSJellyfinSession.message(for: error) }
     }
 
