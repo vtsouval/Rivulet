@@ -3,6 +3,8 @@
 
 import SwiftUI
 import UIKit
+import AVKit
+import MediaPlayer
 
 /// Touch adaptation of tvOS `PlayerRailView`. The assets, glass treatment,
 /// metadata hierarchy and progress colours stay shared visually; only the
@@ -76,6 +78,7 @@ struct IOSPlayerGlassRail<Controls: View>: View {
                 )
             }
         }
+        .glassEffect(.regular, in: railShape)
         .overlay { railShape.stroke(.white.opacity(0.10), lineWidth: 1) }
         .shadow(color: .black.opacity(0.60), radius: compact ? 22 : 35, y: compact ? 10 : 15)
     }
@@ -139,6 +142,34 @@ struct IOSPlayerControlButton: View {
     }
 
     private var diameter: CGFloat { dense ? 36 : (compact ? 44 : 58) }
+}
+
+/// Apple's native route picker. Aether exposes its AVPlayer only for native
+/// remote/HLS playback; in that state this control hands video to AirPlay
+/// without duplicating route discovery or storing device information.
+struct IOSAirPlayRouteButton: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let view = AVRoutePickerView()
+        view.prioritizesVideoDevices = true
+        view.activeTintColor = .systemCyan
+        view.tintColor = .white
+        return view
+    }
+
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+}
+
+/// System volume is intentionally used instead of a private player scalar so
+/// hardware volume buttons and the on-screen slider always stay synchronized.
+struct IOSSystemVolumeSlider: UIViewRepresentable {
+    func makeUIView(context: Context) -> MPVolumeView {
+        let view = MPVolumeView(frame: .zero)
+        view.showsRouteButton = false
+        view.showsVolumeSlider = true
+        return view
+    }
+
+    func updateUIView(_ uiView: MPVolumeView, context: Context) {}
 }
 
 private struct IOSPlayerProgressScrubber: View {

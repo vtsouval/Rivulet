@@ -158,6 +158,20 @@ nonisolated struct JellyfinNameIDPairDTO: Decodable, Hashable, Sendable {
     }
 }
 
+/// `/Genres` uses the same lightweight name/id shape but wraps it in an
+/// `Items` envelope. A dedicated type documents that contract and avoids
+/// decoding the much larger BaseItem DTO for a two-field response.
+nonisolated struct JellyfinGenreQueryResultDTO: Decodable, Hashable, Sendable {
+    let items: [JellyfinNameIDPairDTO]
+
+    enum CodingKeys: String, CodingKey { case items = "Items" }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        items = try values.decodeIfPresent([JellyfinNameIDPairDTO].self, forKey: .items) ?? []
+    }
+}
+
 nonisolated struct JellyfinPersonDTO: Decodable, Hashable, Sendable {
     let id: String?
     let name: String?

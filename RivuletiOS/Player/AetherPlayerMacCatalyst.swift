@@ -89,8 +89,10 @@ final class AetherPlayer: ObservableObject {
     @Published private(set) var nativeSubtitleCues: [SubtitleCue] = []
     @Published private(set) var sourceTime: Double = 0
     @Published private(set) var videoSize: CGSize = .zero
+    @Published private(set) var playbackRate: Float = 1
 
     let avPlayer = AVPlayer()
+    var currentAVPlayer: AVPlayer? { avPlayer }
     private var cancellables = Set<AnyCancellable>()
     private var timeObserver: Any?
     private var audioGroup: AVMediaSelectionGroup?
@@ -181,6 +183,15 @@ final class AetherPlayer: ObservableObject {
         state = .paused
     }
 
+    func setRate(_ rate: Float) {
+        let sanitized = min(max(rate, 0.5), 2)
+        playbackRate = sanitized
+        avPlayer.defaultRate = sanitized
+        if avPlayer.rate > 0 {
+            avPlayer.rate = sanitized
+        }
+    }
+
     func seek(to time: TimeInterval) async {
         let target = CMTime(seconds: max(0, time), preferredTimescale: 600)
         await avPlayer.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
@@ -225,6 +236,8 @@ final class AetherPlayer: ObservableObject {
         nativeSubtitleCues = []
         videoSize = .zero
         sourceTime = 0
+        playbackRate = 1
+        avPlayer.defaultRate = 1
         isBuffering = false
         state = .idle
     }

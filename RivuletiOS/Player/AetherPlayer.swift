@@ -116,6 +116,8 @@ final class AetherPlayer: ObservableObject {
     @Published private(set) var nativeSubtitleCues: [SubtitleCue] = []
     @Published private(set) var sourceTime: Double = 0
     @Published private(set) var videoSize: CGSize = .zero
+    @Published private(set) var currentAVPlayer: AVPlayer?
+    @Published private(set) var playbackRate: Float = 1
     /// AVPlayerLayer does not paint remote HLS WebVTT captions when the host
     /// supplies its own controls, so forward native legible output to SwiftUI.
     private final class NativeLegibleBridge: NSObject, AVPlayerItemLegibleOutputPushDelegate {
@@ -244,6 +246,10 @@ final class AetherPlayer: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] avPlayer in
                 guard let self else { return }
+                self.currentAVPlayer = avPlayer
+                avPlayer?.allowsExternalPlayback = true
+                avPlayer?.usesExternalPlaybackWhileExternalScreenIsActive = true
+                avPlayer?.preventsDisplaySleepDuringVideoPlayback = true
                 self.nativeItemObservation = nil
                 guard let avPlayer else {
                     self.observeVideoSize(of: nil)
@@ -360,6 +366,12 @@ final class AetherPlayer: ObservableObject {
     func pause() {
         engine.pause()
     }
+
+    func setRate(_ rate: Float) {
+        let sanitized = min(max(rate, 0.5), 2)
+        playbackRate = sanitized
+        engine.setRate(sanitized)
+    }
     func seek(to time: TimeInterval) async { await engine.seek(to: max(0, time)) }
 
     var duration: TimeInterval {
@@ -398,6 +410,8 @@ final class AetherPlayer: ObservableObject {
         videoSize = .zero
         engine.stop()
         state = .idle
+        currentAVPlayer = nil
+        playbackRate = 1
     }
 
     func bind(view: AetherPlayerView) {

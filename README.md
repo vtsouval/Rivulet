@@ -61,8 +61,11 @@ Playback runs on [AetherEngine](https://github.com/superuser404notfound/AetherEn
 ### Jellyfin
 
 - Native Jellyfin sign-in by password or Quick Connect, with tokens stored in the Keychain.
-- Jellyfin Home, libraries, search, Continue Watching, Recently Added, artwork, seasons, episodes, people, and user state.
+- Native Home and Discover shelves plus paged Movies and TV Shows catalogs with genre, favorites, watchlist, unwatched, and sort controls.
+- Failure-isolated Continue Watching, Next Up, Recently Added, Favorites, and Top Rated shelves, backed by a non-secret on-device metadata snapshot for immediate relaunches.
+- Jellyfin libraries, search, artwork, seasons, episodes, people, and user state across iPhone, iPad, Apple TV, and Mac Catalyst.
 - Direct Jellyfin playback negotiation with resume position, audio/subtitle selection, progress reporting, and live-session cleanup.
+- Native Apple volume and AirPlay route controls for AVPlayer-backed Aether streams, plus chapter-driven Skip Intro and Skip Credits actions.
 - Plex and Jellyfin accounts can coexist; choose the active provider in Settings without signing out of the other service.
 
 ### Live TV
@@ -70,7 +73,8 @@ Playback runs on [AetherEngine](https://github.com/superuser404notfound/AetherEn
 - Dispatcharr and generic M3U/XMLTV sources
 - Plex Live TV
 - Jellyfin Live TV, including channel metadata, guide data, authenticated playback, and server live-session cleanup
-- Channel guide, favorites, and recently watched
+- Native country, category, Sports, and Favorites browsing with per-user default-country and preferred-sports-feed settings
+- Channel guide, now/next metadata, progress, favorites, system volume, AirPlay routing, and recently watched
 - Multi-stream mode: watch several channels at once in a grid, or promote one to focus while the others play muted
 
 Dispatcharr and Plex Live TV are tested regularly. Generic M3U/XMLTV is wired up but less battle-tested. Feedback welcome.

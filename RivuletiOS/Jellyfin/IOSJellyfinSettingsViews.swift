@@ -191,16 +191,27 @@ struct IOSJellyfinPlaybackSettingsView: View {
     @AppStorage("ios.autoplayNextEpisode") private var autoplayNextEpisode = true
     @AppStorage("playerSkipBackwardSeconds") private var skipBackwardSeconds = 10
     @AppStorage("playerSkipForwardSeconds") private var skipForwardSeconds = 30
+    @AppStorage("ios.autoplayTrailers") private var autoplayTrailers = true
+    @AppStorage("ios.showSkipIntro") private var showSkipIntro = true
+    @AppStorage("ios.showSkipCredits") private var showSkipCredits = true
+    @AppStorage("ios.cellularQuality") private var cellularQuality = "720p"
 
     var body: some View {
         Form {
             Section("Video") {
-                Picker("Preferred quality", selection: $quality) {
+                Picker("Wi-Fi quality", selection: $quality) {
                     ForEach(JellyfinPlaybackQuality.allCases) { option in
                         Text(option.title).tag(option.rawValue)
                     }
                 }
+                Picker("Cellular quality", selection: $cellularQuality) {
+                    Text("Automatic").tag("auto")
+                    Text("1080p").tag("1080p")
+                    Text("720p").tag("720p")
+                    Text("480p").tag("480p")
+                }
                 Toggle("Auto-play next episode", isOn: $autoplayNextEpisode)
+                Toggle("Auto-play trailers", isOn: $autoplayTrailers)
             }
             Section("Languages") {
                 Picker("Audio", selection: $audioLanguage) { languageOptions }
@@ -212,6 +223,8 @@ struct IOSJellyfinPlaybackSettingsView: View {
             Section("Skip controls") {
                 Stepper("Back \(skipBackwardSeconds) seconds", value: $skipBackwardSeconds, in: 5...60, step: 5)
                 Stepper("Forward \(skipForwardSeconds) seconds", value: $skipForwardSeconds, in: 5...120, step: 5)
+                Toggle("Show Skip Intro", isOn: $showSkipIntro)
+                Toggle("Show Skip Credits", isOn: $showSkipCredits)
             }
         }
         .navigationTitle("Playback")
@@ -225,5 +238,92 @@ struct IOSJellyfinPlaybackSettingsView: View {
         Text("German").tag("deu")
         Text("Spanish").tag("spa")
         Text("French").tag("fra")
+    }
+}
+
+struct IOSJellyfinLiveTVSettingsView: View {
+    @EnvironmentObject private var jellyfin: IOSJellyfinSession
+    @State private var defaultCountry = IOSLiveTVCountry.all.rawValue
+    @State private var sportsCountry = IOSLiveTVCountry.greece.rawValue
+    @AppStorage("ios.liveTV.startInFavorites") private var startInFavorites = false
+    @AppStorage("ios.liveTV.showProgress") private var showProgress = true
+    @AppStorage("ios.liveTV.preloadGuide") private var preloadGuide = true
+
+    var body: some View {
+        Form {
+            Section("Lineup") {
+                Picker("Default country", selection: $defaultCountry) {
+                    ForEach(IOSLiveTVCountry.allCases) { Text("\($0.flag) \($0.rawValue)").tag($0.rawValue) }
+                }
+                Picker("Preferred sports feed", selection: $sportsCountry) {
+                    ForEach(IOSLiveTVCountry.allCases.filter { $0 != .all && $0 != .international }) {
+                        Text("\($0.flag) \($0.rawValue)").tag($0.rawValue)
+                    }
+                }
+                Toggle("Open Favorites first", isOn: $startInFavorites)
+            }
+            Section("Guide") {
+                Toggle("Show programme progress", isOn: $showProgress)
+                Toggle("Preload guide data", isOn: $preloadGuide)
+            }
+        }
+        .navigationTitle("Live TV")
+        .onAppear {
+            let suffix = jellyfin.userName ?? "default"
+            defaultCountry = UserDefaults.standard.string(forKey: "ios.liveTV.country.\(suffix)") ?? IOSLiveTVCountry.all.rawValue
+            sportsCountry = UserDefaults.standard.string(forKey: "ios.liveTV.sportsCountry.\(suffix)") ?? IOSLiveTVCountry.greece.rawValue
+        }
+        .onChange(of: defaultCountry) { _, value in
+            UserDefaults.standard.set(value, forKey: "ios.liveTV.country.\(jellyfin.userName ?? "default")")
+        }
+        .onChange(of: sportsCountry) { _, value in
+            UserDefaults.standard.set(value, forKey: "ios.liveTV.sportsCountry.\(jellyfin.userName ?? "default")")
+        }
+    }
+}
+
+struct IOSJellyfinAppearanceSettingsView: View {
+    @AppStorage("ios.showAnime") private var showAnime = true
+    @AppStorage("ios.blurEpisodeSpoilers") private var blurSpoilers = true
+    @AppStorage("ios.posterDensity") private var posterDensity = "comfortable"
+    @AppStorage("ios.reduceArtworkMotion") private var reduceArtworkMotion = false
+
+    var body: some View {
+        Form {
+            Section("Discovery") {
+                Toggle("Show Anime", isOn: $showAnime)
+                Toggle("Blur unwatched episode spoilers", isOn: $blurSpoilers)
+            }
+            Section("Appearance") {
+                Picker("Poster size", selection: $posterDensity) {
+                    Text("Compact").tag("compact")
+                    Text("Comfortable").tag("comfortable")
+                    Text("Large").tag("large")
+                }
+                Toggle("Reduce artwork motion", isOn: $reduceArtworkMotion)
+            }
+        }
+        .navigationTitle("Discovery & Appearance")
+    }
+}
+
+struct IOSJellyfinStorageSettingsView: View {
+    @EnvironmentObject private var jellyfin: IOSJellyfinSession
+    @State private var displayedSize = "0 bytes"
+
+    var body: some View {
+        Form {
+            Section {
+                LabeledContent("Catalog snapshots", value: displayedSize)
+                Button("Clear cached metadata", systemImage: "trash", role: .destructive) {
+                    jellyfin.clearCachedData()
+                    displayedSize = jellyfin.cachedDataSize
+                }
+            } footer: {
+                Text("Artwork uses the system URL cache. Clearing metadata never removes watch history or Jellyfin authentication.")
+            }
+        }
+        .navigationTitle("Storage & Cache")
+        .onAppear { displayedSize = jellyfin.cachedDataSize }
     }
 }

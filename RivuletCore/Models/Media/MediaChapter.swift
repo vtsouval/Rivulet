@@ -10,7 +10,7 @@
 
 import Foundation
 
-struct MediaChapter: Hashable, Identifiable, Sendable {
+struct MediaChapter: Hashable, Identifiable, Sendable, Codable {
     let id: String
     let title: String?
     let start: TimeInterval

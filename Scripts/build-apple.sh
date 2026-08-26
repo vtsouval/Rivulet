@@ -43,7 +43,9 @@ package_ios() {
   build_number="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${app}/Info.plist")"
   package_dir="${ROOT_DIR}/build/packages"
   stage="$(mktemp -d)"
-  trap 'rm -rf "${stage}"' EXIT
+  # Expand the function-local path now. A deferred reference to `stage`
+  # becomes unbound after this function returns under `set -u`.
+  trap "rm -rf '${stage}'" EXIT
   mkdir -p "${stage}/Payload" "${package_dir}"
   ditto "${app}" "${stage}/Payload/Rivulet.app"
   ipa="${package_dir}/Rivulet-iOS-${version}-build${build_number}-device.ipa"
@@ -87,7 +89,7 @@ case "${COMMAND}" in
     ;;
   tvos-simulator)
     xcodebuild -project "${PROJECT}" -scheme Rivulet \
-      -configuration Debug -destination "generic/platform=tvOS Simulator" \
+      -configuration Debug -destination "platform=tvOS Simulator,name=Apple TV 4K (3rd generation)" \
       -derivedDataPath "${DERIVED_DATA}" build
     ;;
   tvos-device)

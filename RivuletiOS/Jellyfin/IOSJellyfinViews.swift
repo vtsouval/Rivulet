@@ -182,10 +182,16 @@ struct IOSJellyfinRootView: View {
     var body: some View {
         TabView(selection: $selectedTab) {
             Tab("Home", systemImage: "house.fill", value: "home") { IOSJellyfinHomeView() }
-            Tab("Libraries", systemImage: "rectangle.stack.fill", value: "libraries") { IOSJellyfinLibrariesView() }
-            Tab("Search", systemImage: "magnifyingglass", value: "search") { IOSJellyfinSearchView() }
+            Tab("Movies", systemImage: "film.stack.fill", value: "movies") {
+                IOSJellyfinCatalogView(kind: .movies)
+            }
+            Tab("TV Shows", systemImage: "tv.fill", value: "shows") {
+                IOSJellyfinCatalogView(kind: .shows)
+            }
             Tab("Live TV", systemImage: "play.tv.fill", value: "live") { IOSJellyfinLiveTVView() }
-            Tab("Settings", systemImage: "gearshape.fill", value: "settings") { IOSJellyfinSettingsView() }
+            Tab("Search", systemImage: "magnifyingglass", value: "search", role: .search) {
+                IOSJellyfinSearchView()
+            }
         }
         .tabBarMinimizeBehavior(.onScrollDown)
         .tint(.cyan)
@@ -193,8 +199,15 @@ struct IOSJellyfinRootView: View {
     }
 }
 
-private struct IOSJellyfinHomeView: View {
+struct IOSJellyfinHomeView: View {
     @EnvironmentObject private var jellyfin: IOSJellyfinSession
+    @State private var mode = HomeMode.home
+
+    private enum HomeMode: String, CaseIterable, Identifiable {
+        case home = "Home"
+        case discover = "Discover"
+        var id: String { rawValue }
+    }
 
     var body: some View {
         NavigationStack {
@@ -210,10 +223,16 @@ private struct IOSJellyfinHomeView: View {
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 28) {
-                            if let hero = jellyfin.homeHubs.flatMap(\.items).first {
+                            Picker("Browse", selection: $mode) {
+                                ForEach(HomeMode.allCases) { Text($0.rawValue).tag($0) }
+                            }
+                            .pickerStyle(.segmented)
+                            .padding(.horizontal)
+
+                            if let hero = visibleHubs.flatMap(\.items).first {
                                 IOSJellyfinHero(item: hero)
                             }
-                            ForEach(jellyfin.homeHubs) { hub in
+                            ForEach(visibleHubs) { hub in
                                 IOSJellyfinShelf(title: hub.title, items: hub.items)
                             }
                         }
@@ -222,8 +241,24 @@ private struct IOSJellyfinHomeView: View {
                     .refreshable { await jellyfin.refresh() }
                 }
             }
-            .navigationTitle("Home")
+            .navigationTitle(mode.rawValue)
+            .toolbar { IOSJellyfinAccountToolbar() }
             .navigationDestination(for: MediaItem.self) { IOSJellyfinDetailView(item: $0) }
+        }
+    }
+
+    private var visibleHubs: [MediaHub] {
+        switch mode {
+        case .home:
+            let values = jellyfin.homeHubs.filter {
+                $0.title == "Continue Watching" || $0.title == "Next Up" || $0.title.hasPrefix("Favorite")
+            }
+            return values.isEmpty ? jellyfin.homeHubs : values
+        case .discover:
+            let values = jellyfin.homeHubs.filter {
+                $0.title != "Continue Watching" && $0.title != "Next Up"
+            }
+            return values.isEmpty ? jellyfin.homeHubs : values
         }
     }
 
@@ -286,7 +321,7 @@ private struct IOSJellyfinLibraryView: View {
     }
 }
 
-private struct IOSJellyfinSearchView: View {
+struct IOSJellyfinSearchView: View {
     @EnvironmentObject private var jellyfin: IOSJellyfinSession
     @State private var query = ""
     @State private var results: [MediaItem] = []
@@ -307,6 +342,7 @@ private struct IOSJellyfinSearchView: View {
                 if let error { ContentUnavailableView("Search failed", systemImage: "exclamationmark.triangle", description: Text(error)) }
             }
             .navigationTitle("Search")
+            .toolbar { IOSJellyfinAccountToolbar() }
             .searchable(text: $query, prompt: "Movies, shows and episodes")
             .navigationDestination(for: MediaItem.self) { IOSJellyfinDetailView(item: $0) }
             .task(id: query) { await search() }
@@ -323,7 +359,7 @@ private struct IOSJellyfinSearchView: View {
     }
 }
 
-private struct IOSJellyfinSettingsView: View {
+struct IOSJellyfinSettingsView: View {
     @EnvironmentObject private var jellyfin: IOSJellyfinSession
 
     var body: some View {
@@ -357,11 +393,26 @@ private struct IOSJellyfinSettingsView: View {
                     } label: {
                         Label("Playback & languages", systemImage: "slider.horizontal.3")
                     }
+                    NavigationLink {
+                        IOSJellyfinLiveTVSettingsView()
+                    } label: {
+                        Label("Live TV", systemImage: "play.tv")
+                    }
+                    NavigationLink {
+                        IOSJellyfinAppearanceSettingsView()
+                    } label: {
+                        Label("Discovery & appearance", systemImage: "sparkles")
+                    }
+                    NavigationLink {
+                        IOSJellyfinStorageSettingsView()
+                    } label: {
+                        Label("Storage & cache", systemImage: "externaldrive")
+                    }
                 }
                 Section("Playback") {
                     LabeledContent("Engine", value: "AetherEngine")
                     LabeledContent("Direct play", value: "Preferred")
-                    Text("Jellyfin negotiates direct play, remux, or HLS without exposing server or debrid credentials in media URLs.")
+                    Text("Jellyfin negotiates direct play, remux, or HLS. AirPlay is available whenever the native HLS path is active.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section { NavigationLink("Licenses & Legal") { IOSLicensesView() } }
@@ -415,13 +466,15 @@ private struct IOSJellyfinShelf: View {
     }
 }
 
-private struct IOSJellyfinPosterCard: View {
+struct IOSJellyfinPosterCard: View {
     let item: MediaItem
+    var width: CGFloat? = 138
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             IOSJellyfinArtwork(url: item.artwork.poster ?? item.artwork.thumbnail, aspectRatio: 2 / 3)
-                .frame(width: 138)
+                .frame(maxWidth: width == nil ? .infinity : nil)
+                .frame(width: width)
                 .overlay(alignment: .bottom) {
                     if let progress = item.watchProgress {
                         ProgressView(value: progress).tint(.cyan).padding(.horizontal, 6).padding(.bottom, 5)
@@ -433,13 +486,15 @@ private struct IOSJellyfinPosterCard: View {
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-            Text(item.title).font(.subheadline.weight(.semibold)).lineLimit(2).frame(width: 138, alignment: .leading)
+            Text(item.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
+                .frame(width: width, alignment: .leading)
             if let year = item.year { Text(String(year)).font(.caption).foregroundStyle(.secondary) }
         }
     }
 }
 
-private struct IOSJellyfinArtwork: View {
+struct IOSJellyfinArtwork: View {
     let url: URL?
     let aspectRatio: CGFloat
 

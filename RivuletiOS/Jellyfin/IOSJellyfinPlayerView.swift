@@ -10,17 +10,20 @@ struct IOSJellyfinPlaybackContext: Identifiable {
     let stream: StreamInfo
     let provider: JellyfinProvider
     let followingEpisodes: [MediaItem]
+    let chapters: [MediaChapter]
 
     init(
         item: MediaItem,
         stream: StreamInfo,
         provider: JellyfinProvider,
-        followingEpisodes: [MediaItem] = []
+        followingEpisodes: [MediaItem] = [],
+        chapters: [MediaChapter] = []
     ) {
         self.item = item
         self.stream = stream
         self.provider = provider
         self.followingEpisodes = followingEpisodes
+        self.chapters = chapters
     }
 }
 
@@ -38,15 +41,19 @@ struct IOSJellyfinPlayerView: View {
     @State private var currentStream: StreamInfo
     @State private var episodeQueue: [MediaItem]
     @State private var isAdvancing = false
+    @State private var chapters: [MediaChapter]
     @AppStorage("ios.autoplayNextEpisode") private var autoplayNextEpisode = true
     @AppStorage("playerSkipBackwardSeconds") private var skipBackwardSeconds = 10
     @AppStorage("playerSkipForwardSeconds") private var skipForwardSeconds = 30
+    @AppStorage("ios.showSkipIntro") private var showSkipIntro = true
+    @AppStorage("ios.showSkipCredits") private var showSkipCredits = true
 
     init(context: IOSJellyfinPlaybackContext) {
         self.context = context
         _currentItem = State(initialValue: context.item)
         _currentStream = State(initialValue: context.stream)
         _episodeQueue = State(initialValue: context.followingEpisodes)
+        _chapters = State(initialValue: context.chapters)
     }
 
     var body: some View {
@@ -69,6 +76,23 @@ struct IOSJellyfinPlayerView: View {
             .ignoresSafeArea()
 
             if controlsVisible { chrome.transition(.opacity) }
+            if let chapter = activeSkippableChapter {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Button(chapter.isCredits ? "Skip Credits" : "Skip Intro", systemImage: "forward.end.fill") {
+                            Task { await player.seek(to: chapter.end ?? chapter.start + 90) }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.headline)
+                        .padding(.horizontal, 18).padding(.vertical, 12)
+                        .glassEffect(.regular.interactive(), in: .capsule)
+                        .padding(.trailing, 20).padding(.bottom, controlsVisible ? 122 : 24)
+                    }
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
             if shouldShowActivity {
                 ProgressView(player.isBuffering ? "Buffering…" : currentItem.title)
                     .tint(.white).foregroundStyle(.white).padding(16)
@@ -131,6 +155,13 @@ struct IOSJellyfinPlayerView: View {
                 HStack(spacing: 4) {
                     IOSPlayerControlButton(title: "Subtitles", systemImage: subtitleIcon, compact: true, dense: true) { show(.subtitles) }
                     IOSPlayerControlButton(title: "Audio", systemImage: "waveform", compact: true, dense: true) { show(.audio) }
+                    IOSPlayerControlButton(title: "Playback", systemImage: "slider.horizontal.3", compact: true, dense: true) { show(.playback) }
+                    if player.currentAVPlayer != nil {
+                        IOSAirPlayRouteButton()
+                            .frame(width: 36, height: 36)
+                            .padding(.horizontal, 2)
+                            .accessibilityLabel("AirPlay")
+                    }
                     if !episodeQueue.isEmpty {
                         IOSPlayerControlButton(title: "Next", systemImage: "forward.end.fill", compact: true, dense: true) {
                             Task { await playNextEpisode() }
@@ -176,6 +207,32 @@ struct IOSJellyfinPlayerView: View {
                     if let resolution = currentStream.source.videoResolution { LabeledContent("Quality", value: resolution.uppercased()) }
                     if let container = currentStream.source.container { LabeledContent("Container", value: container.uppercased()) }
                     LabeledContent("Player", value: AetherPlayer.engineName)
+                case .playback:
+                    Section("Speed") {
+                        Picker("Playback speed", selection: Binding(
+                            get: { player.playbackRate },
+                            set: { player.setRate($0) }
+                        )) {
+                            Text("0.5×").tag(Float(0.5))
+                            Text("0.75×").tag(Float(0.75))
+                            Text("Normal").tag(Float(1))
+                            Text("1.25×").tag(Float(1.25))
+                            Text("1.5×").tag(Float(1.5))
+                            Text("2×").tag(Float(2))
+                        }
+                    }
+                    Section("Volume") {
+                        IOSSystemVolumeSlider().frame(height: 36)
+                    }
+                    if player.currentAVPlayer != nil {
+                        Section("Play on another screen") {
+                            HStack {
+                                Label("AirPlay", systemImage: "airplayvideo")
+                                Spacer()
+                                IOSAirPlayRouteButton().frame(width: 44, height: 34)
+                            }
+                        }
+                    }
                 }
             }
             .navigationTitle(panel.title).navigationBarTitleDisplayMode(.inline)
@@ -210,6 +267,12 @@ struct IOSJellyfinPlayerView: View {
     }
     private var isPlaying: Bool { if case .playing = player.state { return true }; return false }
     private var subtitleIcon: String { player.currentSubtitleTrackId == nil ? "captions.bubble" : "captions.bubble.fill" }
+    private var activeSkippableChapter: MediaChapter? {
+        chapters.first { chapter in
+            guard let end = chapter.end, player.sourceTime >= chapter.start, player.sourceTime < end else { return false }
+            return (showSkipIntro && chapter.isIntro) || (showSkipCredits && chapter.isCredits)
+        }
+    }
 
     private func load() async {
         guard let url = currentStream.source.streamURL else { return }
@@ -267,6 +330,7 @@ struct IOSJellyfinPlayerView: View {
             episodeQueue.removeFirst()
             currentItem = next
             currentStream = stream
+            chapters = (try? await context.provider.fullDetail(for: next.ref).chapters) ?? []
             lastReportedSecond = -1
             await load()
         } catch {
@@ -287,8 +351,16 @@ struct IOSJellyfinPlayerView: View {
     }
 
     private enum Panel: String, Identifiable {
-        case subtitles, audio, info
+        case subtitles, audio, playback, info
         var id: String { rawValue }
         var title: String { rawValue.capitalized }
+    }
+}
+
+private extension MediaChapter {
+    var normalizedTitle: String { (title ?? "").lowercased() }
+    var isIntro: Bool { normalizedTitle.contains("intro") || normalizedTitle.contains("opening") }
+    var isCredits: Bool {
+        normalizedTitle.contains("credit") || normalizedTitle.contains("ending") || normalizedTitle.contains("outro")
     }
 }

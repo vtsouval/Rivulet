@@ -9,6 +9,12 @@ import Foundation
 /// persisted by `JellyfinSessionStore` in Keychain.
 @MainActor
 final class IOSJellyfinSession: ObservableObject {
+    struct CatalogPage: Sendable {
+        let items: [MediaItem]
+        let total: Int
+        let hasMore: Bool
+    }
+
     enum State: Equatable {
         case restoring
         case signedOut
@@ -29,6 +35,10 @@ final class IOSJellyfinSession: ObservableObject {
     private var detailCache: [MediaItemRef: MediaItemDetail] = [:]
     private var childrenCache: [MediaItemRef: [MediaItem]] = [:]
     private var relatedCache: [MediaItemRef: [MediaItem]] = [:]
+    private var catalogCache: [JellyfinCatalogQuery: PagedResult<MediaItem>] = [:]
+    private var genreCache: [JellyfinCatalogKind: [JellyfinCatalogGenre]] = [:]
+    private var catalogTasks: [JellyfinCatalogQuery: Task<PagedResult<MediaItem>, Error>] = [:]
+    private var refreshTask: Task<Void, Never>?
     private var restoreTask: Task<Void, Never>?
 
     var isConfigured: Bool { provider != nil }
@@ -54,6 +64,7 @@ final class IOSJellyfinSession: ObservableObject {
         // rejection below still removes it from Keychain before showing UI.
         do {
             try attach(session)
+            restoreSnapshot(for: session)
         } catch {
             state = .failed(Self.message(for: error))
             return
@@ -228,6 +239,20 @@ final class IOSJellyfinSession: ObservableObject {
     }
 
     func refresh() async {
+        if let refreshTask {
+            await refreshTask.value
+            return
+        }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performRefresh()
+        }
+        refreshTask = task
+        await task.value
+        refreshTask = nil
+    }
+
+    private func performRefresh() async {
         guard let provider else { return }
         isRefreshing = true
         defer { isRefreshing = false }
@@ -239,6 +264,7 @@ final class IOSJellyfinSession: ObservableObject {
             self.libraries = libraries
             self.homeHubs = hubs
             state = .connected
+            saveSnapshot()
 
             // Warm the first library pages after the visible home data lands.
             // This makes the first tab switch immediate without delaying home.
@@ -251,6 +277,78 @@ final class IOSJellyfinSession: ObservableObject {
                 state = .failed(Self.message(for: error))
             }
         }
+    }
+
+    /// Loads one page and merges it with the existing catalog without
+    /// duplicating cards. The matching in-flight task is shared by fast repeat
+    /// taps and SwiftUI re-rendering, so one gesture never fans out into
+    /// multiple identical Jellyfin requests.
+    func catalog(
+        _ request: JellyfinCatalogQuery,
+        loadMore: Bool = false,
+        force: Bool = false,
+        pageSize: Int = 48
+    ) async throws -> CatalogPage {
+        guard let provider else { throw MediaProviderError.unauthorized }
+        let existing = force ? nil : catalogCache[request]
+        if !loadMore, let existing {
+            return CatalogPage(items: existing.items, total: existing.total, hasMore: existing.nextPage != nil)
+        }
+        if loadMore, existing?.nextPage == nil, existing != nil {
+            return CatalogPage(items: existing!.items, total: existing!.total, hasMore: false)
+        }
+        if let task = catalogTasks[request] {
+            let result = try await task.value
+            return CatalogPage(items: result.items, total: result.total, hasMore: result.nextPage != nil)
+        }
+
+        let page = loadMore ? (existing?.nextPage ?? Page(offset: existing?.items.count ?? 0, limit: pageSize))
+            : Page(offset: 0, limit: pageSize)
+        let task = Task { try await provider.catalog(request, page: page) }
+        catalogTasks[request] = task
+        defer { catalogTasks[request] = nil }
+        let fetched = try await task.value
+        let merged: PagedResult<MediaItem>
+        if loadMore, let existing {
+            var seen = Set(existing.items.map(\.id))
+            let newItems = fetched.items.filter { seen.insert($0.id).inserted }
+            merged = PagedResult(
+                items: existing.items + newItems,
+                total: max(existing.total, fetched.total),
+                nextPage: fetched.nextPage
+            )
+        } else {
+            merged = fetched
+        }
+        catalogCache[request] = merged
+        saveSnapshot()
+        return CatalogPage(items: merged.items, total: merged.total, hasMore: merged.nextPage != nil)
+    }
+
+    func genres(for kind: JellyfinCatalogKind, force: Bool = false) async throws -> [JellyfinCatalogGenre] {
+        if !force, let cached = genreCache[kind] { return cached }
+        guard let provider else { throw MediaProviderError.unauthorized }
+        let values = try await provider.catalogGenres(kind: kind)
+        genreCache[kind] = values
+        return values
+    }
+
+    func clearCachedData() {
+        guard let session = provider?.session else { return }
+        IOSJellyfinSnapshotCache.shared.remove(server: session.serverURL, userID: session.user.id)
+        libraryCache.removeAll()
+        detailCache.removeAll()
+        childrenCache.removeAll()
+        relatedCache.removeAll()
+        catalogCache.removeAll()
+        genreCache.removeAll()
+    }
+
+    var cachedDataSize: String {
+        ByteCountFormatter.string(
+            fromByteCount: IOSJellyfinSnapshotCache.shared.totalBytes(),
+            countStyle: .file
+        )
     }
 
     func items(in library: MediaLibrary, force: Bool = false) async throws -> [MediaItem] {
@@ -335,6 +433,58 @@ final class IOSJellyfinSession: ObservableObject {
         state = .connected
     }
 
+    private func restoreSnapshot(for session: JellyfinAuthenticatedSession) {
+        guard let snapshot = IOSJellyfinSnapshotCache.shared.load(
+            server: session.serverURL,
+            userID: session.user.id
+        ) else { return }
+        libraries = snapshot.libraries
+        homeHubs = snapshot.homeHubs
+        for (key, items) in snapshot.catalogs {
+            guard let request = Self.catalogRequest(from: key) else { continue }
+            catalogCache[request] = PagedResult(
+                items: items,
+                total: items.count,
+                nextPage: Page(offset: items.count, limit: 48)
+            )
+        }
+    }
+
+    private func saveSnapshot() {
+        guard let session = provider?.session else { return }
+        var catalogs: [String: [MediaItem]] = [:]
+        for (request, page) in catalogCache where request.filter == .all && request.genre == nil {
+            catalogs[Self.catalogKey(for: request)] = Array(page.items.prefix(72))
+        }
+        IOSJellyfinSnapshotCache.shared.save(
+            IOSJellyfinSnapshot(
+                version: IOSJellyfinSnapshot.currentVersion,
+                updatedAt: Date(),
+                libraries: libraries,
+                homeHubs: homeHubs,
+                catalogs: catalogs
+            ),
+            server: session.serverURL,
+            userID: session.user.id
+        )
+    }
+
+    private static func catalogKey(for request: JellyfinCatalogQuery) -> String {
+        [request.kind.rawValue, request.libraryID ?? "", request.sort.cacheKey].joined(separator: "|")
+    }
+
+    private static func catalogRequest(from key: String) -> JellyfinCatalogQuery? {
+        let parts = key.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 3,
+              let kind = JellyfinCatalogKind(rawValue: parts[0]),
+              let sort = SortOption(cacheKey: parts[2]) else { return nil }
+        return JellyfinCatalogQuery(
+            kind: kind,
+            libraryID: parts[1].isEmpty ? nil : parts[1],
+            sort: sort
+        )
+    }
+
     /// Hand control to the signed-in UI immediately and hydrate home data in
     /// an independent task. This prevents the sign-in view's disappearance
     /// from cancelling the refresh that follows a successful login.
@@ -360,6 +510,9 @@ final class IOSJellyfinSession: ObservableObject {
 
     private func prefetch(libraries: [MediaLibrary]) async {
         guard let provider else { return }
+        async let movies = try? catalog(JellyfinCatalogQuery(kind: .movies), pageSize: 48)
+        async let shows = try? catalog(JellyfinCatalogQuery(kind: .shows), pageSize: 48)
+        _ = await (movies, shows)
         let candidates = libraries.filter {
             $0.kind == .movies || $0.kind == .shows || $0.kind == .mixed
         }.prefix(2)
@@ -388,6 +541,10 @@ final class IOSJellyfinSession: ObservableObject {
         detailCache = [:]
         childrenCache = [:]
         relatedCache = [:]
+        catalogCache = [:]
+        genreCache = [:]
+        catalogTasks.values.forEach { $0.cancel() }
+        catalogTasks = [:]
         quickConnectCode = nil
         self.state = state
     }
@@ -406,6 +563,29 @@ final class IOSJellyfinSession: ObservableObject {
         case .notPlayable: return "Jellyfin did not return a playable stream."
         case .backendSpecific(let message): return message
         case nil: return error.localizedDescription
+        }
+    }
+}
+
+private extension SortOption {
+    var cacheKey: String {
+        switch self {
+        case .titleAsc: "titleAsc"
+        case .titleDesc: "titleDesc"
+        case .releaseDateDesc: "releaseDateDesc"
+        case .addedAtDesc: "addedAtDesc"
+        case .ratingDesc: "ratingDesc"
+        }
+    }
+
+    init?(cacheKey: String) {
+        switch cacheKey {
+        case "titleAsc": self = .titleAsc
+        case "titleDesc": self = .titleDesc
+        case "releaseDateDesc": self = .releaseDateDesc
+        case "addedAtDesc": self = .addedAtDesc
+        case "ratingDesc": self = .ratingDesc
+        default: return nil
         }
     }
 }

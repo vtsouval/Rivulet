@@ -245,7 +245,9 @@ struct IOSJellyfinDetailView: View {
         isPreparingPlayback = true
         defer { isPreparingPlayback = false }
         do {
-            let stream = try await jellyfin.resolve(item)
+            async let resolved = jellyfin.resolve(item)
+            async let playbackDetail = try? jellyfin.detail(for: item)
+            let stream = try await resolved
             guard let provider = jellyfin.provider else { throw MediaProviderError.unauthorized }
             let orderedEpisodes = EpisodePicker.inPlaybackOrder(episodes)
             let following: [MediaItem]
@@ -258,7 +260,8 @@ struct IOSJellyfinDetailView: View {
                 item: item,
                 stream: stream,
                 provider: provider,
-                followingEpisodes: following
+                followingEpisodes: following,
+                chapters: await playbackDetail?.chapters ?? []
             )
         } catch { self.error = IOSJellyfinSession.message(for: error) }
     }

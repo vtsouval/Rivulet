@@ -89,6 +89,75 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         }
     }
 
+    /// Paged, filterable Jellyfin-native catalog used by the Apple clients.
+    /// Unlike the legacy library call this can browse across all movie/show
+    /// libraries, preserves server pagination, and keeps favorites and the
+    /// Liquid Media watchlist as distinct concepts.
+    func catalog(_ request: JellyfinCatalogQuery, page: Page) async throws -> PagedResult<MediaItem> {
+        if request.filter == .watchlist {
+            return try await watchlistCatalog(request, page: page)
+        }
+
+        return try await jellyfinCall {
+            var query = commonQueryItems
+            query += [
+                URLQueryItem(name: "Recursive", value: "true"),
+                URLQueryItem(name: "IncludeItemTypes", value: request.kind.includeItemTypes),
+                URLQueryItem(name: "StartIndex", value: String(max(0, page.offset))),
+                URLQueryItem(name: "Limit", value: String(max(1, page.limit))),
+                URLQueryItem(name: "SortBy", value: request.sort.queryName),
+                URLQueryItem(name: "SortOrder", value: request.sort.queryOrder)
+            ]
+            if let libraryID = request.libraryID?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !libraryID.isEmpty {
+                query.append(URLQueryItem(name: "ParentId", value: libraryID))
+            }
+            if let genre = request.genre?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !genre.isEmpty {
+                query.append(URLQueryItem(name: "Genres", value: genre))
+            }
+            switch request.filter {
+            case .favorites:
+                query.append(URLQueryItem(name: "Filters", value: "IsFavorite"))
+            case .unwatched:
+                query.append(URLQueryItem(name: "IsPlayed", value: "false"))
+            case .all, .watchlist:
+                break
+            }
+
+            let response: JellyfinItemQueryResultDTO = try await transport.get(
+                "/Items", queryItems: query, token: session.accessToken
+            )
+            return JellyfinCatalogMapper.pagedItems(response, requestedPage: page, context: catalogContext)
+        }
+    }
+
+    func catalogGenres(kind: JellyfinCatalogKind, libraryID: String? = nil) async throws -> [JellyfinCatalogGenre] {
+        try await jellyfinCall {
+            var query = [
+                URLQueryItem(name: "UserId", value: session.user.id),
+                URLQueryItem(name: "Recursive", value: "true"),
+                URLQueryItem(name: "IncludeItemTypes", value: kind.includeItemTypes),
+                URLQueryItem(name: "SortBy", value: "SortName"),
+                URLQueryItem(name: "SortOrder", value: "Ascending")
+            ]
+            if let libraryID, !libraryID.isEmpty {
+                query.append(URLQueryItem(name: "ParentId", value: libraryID))
+            }
+            let response: JellyfinGenreQueryResultDTO = try await transport.get(
+                "/Genres", queryItems: query, token: session.accessToken
+            )
+            var seen = Set<String>()
+            return response.items.compactMap { value in
+                guard let name = value.name?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !name.isEmpty else { return nil }
+                let identity = (value.id?.isEmpty == false ? value.id! : name.lowercased())
+                guard seen.insert(identity.lowercased()).inserted else { return nil }
+                return JellyfinCatalogGenre(id: identity, name: name)
+            }
+        }
+    }
+
     func children(of itemRef: MediaItemRef) async throws -> [MediaItem] {
         try await jellyfinCall {
             var query = commonQueryItems
@@ -245,16 +314,59 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         }
     }
 
+    func nextUp(limit: Int) async throws -> [MediaItem] {
+        try await jellyfinCall {
+            var query = commonQueryItems
+            query += [
+                URLQueryItem(name: "Limit", value: String(max(1, limit))),
+                URLQueryItem(name: "EnableResumable", value: "false"),
+                URLQueryItem(name: "DisableFirstEpisode", value: "false")
+            ]
+            let response: JellyfinItemQueryResultDTO = try await transport.get(
+                "/Shows/NextUp", queryItems: query, token: session.accessToken
+            )
+            return map(response.items)
+        }
+    }
+
     func hubs() async throws -> [MediaHub] {
-        async let resumed = continueWatching(limit: 24)
-        async let recent = recentlyAdded(limit: 30)
-        let (continueItems, recentItems) = try await (resumed, recent)
+        async let resumed = optionalItems { try await self.continueWatching(limit: 24) }
+        async let upNext = optionalItems { try await self.nextUp(limit: 24) }
+        async let recentMovies = optionalCatalog(JellyfinCatalogQuery(kind: .movies), limit: 30)
+        async let recentShows = optionalCatalog(JellyfinCatalogQuery(kind: .shows), limit: 30)
+        async let favoriteMovies = optionalCatalog(
+            JellyfinCatalogQuery(kind: .movies, filter: .favorites, sort: .addedAtDesc), limit: 24
+        )
+        async let topMovies = optionalCatalog(
+            JellyfinCatalogQuery(kind: .movies, sort: .ratingDesc), limit: 24
+        )
+        async let topShows = optionalCatalog(
+            JellyfinCatalogQuery(kind: .shows, sort: .ratingDesc), limit: 24
+        )
+        let (continueItems, nextItems, movieItems, showItems, favorites, ratedMovies, ratedShows) = await (
+            resumed, upNext, recentMovies, recentShows, favoriteMovies, topMovies, topShows
+        )
         var result: [MediaHub] = []
         if !continueItems.isEmpty {
             result.append(MediaHub(id: "\(id):continue", providerID: id, title: "Continue Watching", style: .shelf, items: continueItems))
         }
-        if !recentItems.isEmpty {
-            result.append(MediaHub(id: "\(id):recent", providerID: id, title: "Recently Added", style: .shelf, items: recentItems))
+        if !nextItems.isEmpty {
+            result.append(MediaHub(id: "\(id):next", providerID: id, title: "Next Up", style: .shelf, items: nextItems))
+        }
+        if !movieItems.isEmpty {
+            result.append(MediaHub(id: "\(id):recent-movies", providerID: id, title: "New Movies", style: .shelf, items: movieItems))
+        }
+        if !showItems.isEmpty {
+            result.append(MediaHub(id: "\(id):recent-shows", providerID: id, title: "New TV Shows", style: .shelf, items: showItems))
+        }
+        if !favorites.isEmpty {
+            result.append(MediaHub(id: "\(id):favorite-movies", providerID: id, title: "Favorite Movies", style: .shelf, items: favorites))
+        }
+        if !ratedMovies.isEmpty {
+            result.append(MediaHub(id: "\(id):top-movies", providerID: id, title: "Top Rated Movies", style: .shelf, items: ratedMovies))
+        }
+        if !ratedShows.isEmpty {
+            result.append(MediaHub(id: "\(id):top-shows", providerID: id, title: "Top Rated TV Shows", style: .shelf, items: ratedShows))
         }
         return result
     }
@@ -473,7 +585,7 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
     /// Jellyfin favorite state is independent from the Liquid Media watchlist.
     /// Keep the two actions separate so an iOS heart never mutates watchlist.
     func setFavorite(_ ref: MediaItemRef, enabled: Bool) async throws {
-        try await jellyfinCall {
+        _ = try await jellyfinCall {
             try await transport.requestEmpty(
                 "/Users/\(session.user.id)/FavoriteItems/\(ref.itemID)",
                 method: enabled ? .post : .delete,
@@ -495,6 +607,49 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
 
     private func map(_ values: [JellyfinBaseItemDTO]) -> [MediaItem] {
         values.compactMap { JellyfinCatalogMapper.item($0, context: catalogContext) }
+    }
+
+    private func optionalItems(_ operation: @escaping @Sendable () async throws -> [MediaItem]) async -> [MediaItem] {
+        (try? await operation()) ?? []
+    }
+
+    private func optionalCatalog(_ request: JellyfinCatalogQuery, limit: Int) async -> [MediaItem] {
+        (try? await catalog(request, page: Page(offset: 0, limit: limit)).items) ?? []
+    }
+
+    private func watchlistCatalog(
+        _ request: JellyfinCatalogQuery,
+        page: Page
+    ) async throws -> PagedResult<MediaItem> {
+        try await jellyfinCall {
+            let response: JellyfinWatchlistResponse = try await transport.get(
+                "/plugins/liquidmedia/watchlist", token: session.accessToken
+            )
+            let offset = min(max(0, page.offset), response.itemIDs.count)
+            let end = min(response.itemIDs.count, offset + max(1, page.limit))
+            let ids = Array(response.itemIDs[offset..<end])
+            guard !ids.isEmpty else {
+                return PagedResult(items: [], total: response.itemIDs.count, nextPage: nil)
+            }
+            var query = commonQueryItems
+            query += [
+                URLQueryItem(name: "Ids", value: ids.joined(separator: ",")),
+                URLQueryItem(name: "Recursive", value: "true"),
+                URLQueryItem(name: "IncludeItemTypes", value: request.kind.includeItemTypes),
+                URLQueryItem(name: "SortBy", value: request.sort.queryName),
+                URLQueryItem(name: "SortOrder", value: request.sort.queryOrder),
+                URLQueryItem(name: "Limit", value: String(ids.count))
+            ]
+            if let genre = request.genre?.trimmingCharacters(in: .whitespacesAndNewlines), !genre.isEmpty {
+                query.append(URLQueryItem(name: "Genres", value: genre))
+            }
+            let items: JellyfinItemQueryResultDTO = try await transport.get(
+                "/Items", queryItems: query, token: session.accessToken
+            )
+            let mapped = map(items.items)
+            let next = end < response.itemIDs.count ? Page(offset: end, limit: page.limit) : nil
+            return PagedResult(items: mapped, total: response.itemIDs.count, nextPage: next)
+        }
     }
 
     private func nextEpisodeIfNeeded(for item: JellyfinBaseItemDTO) async throws -> JellyfinBaseItemDTO? {

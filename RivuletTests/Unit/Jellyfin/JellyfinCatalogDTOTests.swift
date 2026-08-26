@@ -80,6 +80,41 @@ final class JellyfinCatalogDTOTests: XCTestCase {
         XCTAssertNil(continuation.nextPage)
     }
 
+    func testGenreEnvelopeDecodesAndToleratesMissingItems() throws {
+        let response: JellyfinGenreQueryResultDTO = try decode(
+            """
+            {
+              "Items": [
+                {"Id":"action", "Name":"Action"},
+                {"Id":"science-fiction", "Name":"Science Fiction"}
+              ]
+            }
+            """
+        )
+
+        XCTAssertEqual(response.items.map(\.name), ["Action", "Science Fiction"])
+
+        let empty: JellyfinGenreQueryResultDTO = try decode("{}")
+        XCTAssertTrue(empty.items.isEmpty)
+    }
+
+    func testCatalogQueryRoundTripsWithoutLosingNativeFilters() throws {
+        let query = JellyfinCatalogQuery(
+            kind: .shows,
+            libraryID: "tv-library",
+            genre: "Drama",
+            filter: .unwatched,
+            sort: .ratingDesc
+        )
+
+        let data = try JSONEncoder().encode(query)
+        let decoded = try JSONDecoder().decode(JellyfinCatalogQuery.self, from: data)
+
+        XCTAssertEqual(decoded, query)
+        XCTAssertEqual(decoded.kind.includeItemTypes, "Series")
+        XCTAssertEqual(decoded.filter.symbolName, "circle")
+    }
+
     private func decode<T: Decodable>(_ json: String) throws -> T {
         try JSONDecoder().decode(T.self, from: Data(json.utf8))
     }
