@@ -8,13 +8,14 @@ name: tvOS Build (shared code)
 # into the tvOS app.
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - 'RivuletCore/**'
       - 'Rivulet.xcodeproj/**'
       - '.github/workflows/build-tvos-core.yml'
   push:
-    branches: [main]
+    branches: [main, feature/jellyfin-provider]
     paths:
       - 'RivuletCore/**'
       - 'Rivulet.xcodeproj/**'
