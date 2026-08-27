@@ -140,6 +140,13 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.6.6 (88)", [
+            "Search no longer treats cancelled requests from rapid typing as visible failures",
+            "Movies and TV Shows now appear in separate native carousels, with empty categories automatically hidden",
+            "A shorter debounce, compact Jellyfin payload and five-minute result cache make repeated searches feel immediate",
+            "Search loading and result transitions use a restrained native animation without flashing stale titles",
+            "Global search now returns title-level movies and series only, keeping episodes inside their proper show page",
+        ]),
         ("1.6.5 (87)", [
             "Home now has one authoritative Continue Watching shelf; the separate Jellyfin Next Up request and duplicate rail are gone",
             "Continue Watching uses cinematic landscape cards with TV show, episode title, season and episode position, time remaining and progress",

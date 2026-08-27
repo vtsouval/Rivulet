@@ -9,6 +9,11 @@ import Foundation
 /// persisted by `JellyfinSessionStore` in Keychain.
 @MainActor
 final class IOSJellyfinSession: ObservableObject {
+    private struct SearchCacheEntry {
+        let storedAt: Date
+        let items: [MediaItem]
+    }
+
     struct CatalogPage: Sendable {
         let items: [MediaItem]
         let total: Int
@@ -39,6 +44,7 @@ final class IOSJellyfinSession: ObservableObject {
     private var catalogCache: [JellyfinCatalogQuery: PagedResult<MediaItem>] = [:]
     private var genreCache: [JellyfinCatalogKind: [JellyfinCatalogGenre]] = [:]
     private var catalogTasks: [JellyfinCatalogQuery: Task<PagedResult<MediaItem>, Error>] = [:]
+    private var searchCache: [String: SearchCacheEntry] = [:]
     private var refreshTask: Task<Void, Never>?
     private var continueWatchingRefreshTask: Task<Void, Never>?
     private var restoreTask: Task<Void, Never>?
@@ -456,7 +462,26 @@ final class IOSJellyfinSession: ObservableObject {
 
     func search(_ query: String) async throws -> [MediaItem] {
         guard let provider else { throw MediaProviderError.unauthorized }
-        return try await provider.search(query)
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard term.count >= 2 else { return [] }
+        let key = term.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        if let cached = searchCache[key], Date().timeIntervalSince(cached.storedAt) < 300 {
+            return visibleSearchItems(cached.items)
+        }
+
+        let items = try await provider.search(term)
+        try Task.checkCancellation()
+        searchCache[key] = SearchCacheEntry(storedAt: Date(), items: items)
+        if searchCache.count > 20,
+           let oldest = searchCache.min(by: { $0.value.storedAt < $1.value.storedAt })?.key {
+            searchCache.removeValue(forKey: oldest)
+        }
+        return visibleSearchItems(items)
+    }
+
+    private func visibleSearchItems(_ items: [MediaItem]) -> [MediaItem] {
+        let showAnime = (UserDefaults.standard.object(forKey: "ios.showAnime") as? Bool) ?? true
+        return showAnime ? items : items.filter { !$0.isAnime }
     }
 
     func detail(for item: MediaItem, force: Bool = false) async throws -> MediaItemDetail {
@@ -679,6 +704,7 @@ final class IOSJellyfinSession: ObservableObject {
         genreCache = [:]
         catalogTasks.values.forEach { $0.cancel() }
         catalogTasks = [:]
+        searchCache = [:]
         continueWatchingRefreshTask?.cancel()
         continueWatchingRefreshTask = nil
         quickConnectCode = nil

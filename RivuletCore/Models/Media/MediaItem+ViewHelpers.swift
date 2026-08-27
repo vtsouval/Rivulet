@@ -157,6 +157,40 @@ extension MediaItem {
     }
 }
 
+/// Stable, deduplicated search presentation shared by the provider and native
+/// clients. Search results deliberately expose only title-level media: an
+/// episode belongs inside its series page rather than competing with that
+/// series in the global results rail.
+struct MediaSearchSections: Equatable, Sendable {
+    let movies: [MediaItem]
+    let shows: [MediaItem]
+
+    init(_ items: [MediaItem]) {
+        var seenRefs = Set<MediaItemRef>()
+        var seenTitles = Set<String>()
+        var movies: [MediaItem] = []
+        var shows: [MediaItem] = []
+        for item in items where seenRefs.insert(item.ref).inserted {
+            let title = item.title.folding(
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: Locale(identifier: "en_US_POSIX")
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            let identity = "\(item.kind.rawValue)|\(title)|\(item.year.map(String.init) ?? "")"
+            guard title.isEmpty || seenTitles.insert(identity).inserted else { continue }
+            switch item.kind {
+            case .movie: movies.append(item)
+            case .show: shows.append(item)
+            default: continue
+            }
+        }
+        self.movies = movies
+        self.shows = shows
+    }
+
+    var all: [MediaItem] { movies + shows }
+    var isEmpty: Bool { movies.isEmpty && shows.isEmpty }
+}
+
 private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
 }

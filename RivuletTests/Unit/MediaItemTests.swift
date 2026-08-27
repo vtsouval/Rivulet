@@ -141,4 +141,31 @@ final class MediaItemTests: XCTestCase {
         XCTAssertNil(item.continueWatchingSubtitle)
         XCTAssertEqual(item.continueWatchingProgressLabel, "1h 40m left")
     }
+
+    func test_searchSectionsGroupTitleLevelMediaAndRemoveDuplicates() {
+        let movie = searchItem(id: "movie", kind: .movie, title: "Arrival")
+        let duplicateEdition = searchItem(id: "movie-alt", kind: .movie, title: "Arrival")
+        let show = searchItem(id: "show", kind: .show, title: "Severance")
+        let episode = searchItem(id: "episode", kind: .episode, title: "Good News About Hell")
+
+        let sections = MediaSearchSections([show, movie, episode, movie, duplicateEdition])
+
+        XCTAssertEqual(sections.movies.map(\.title), ["Arrival"])
+        XCTAssertEqual(sections.shows.map(\.title), ["Severance"])
+        XCTAssertEqual(sections.all.map(\.title), ["Arrival", "Severance"])
+        XCTAssertFalse(sections.isEmpty)
+        XCTAssertTrue(MediaSearchSections([episode]).isEmpty)
+    }
+
+    private func searchItem(id: String, kind: MediaKind, title: String) -> MediaItem {
+        MediaItem(
+            ref: MediaItemRef(providerID: "jellyfin:server", itemID: id),
+            kind: kind, title: title, sortTitle: nil, overview: nil,
+            year: 2026, runtime: nil, parentRef: nil, grandparentRef: nil,
+            episodeNumber: nil, seasonNumber: nil, childProgress: nil,
+            userState: MediaUserState(isPlayed: false, viewOffset: 0, isFavorite: false, lastViewedAt: nil),
+            artwork: MediaArtwork(poster: nil, backdrop: nil, thumbnail: nil, logo: nil),
+            parentArtwork: nil, grandparentArtwork: nil
+        )
+    }
 }

@@ -214,6 +214,50 @@ nonisolated struct JellyfinNamedURLDTO: Decodable, Hashable, Sendable {
     }
 }
 
+/// Compact relevance-ordered result returned by Jellyfin's indexed
+/// `/Search/Hints` endpoint. Search hints intentionally carry only enough
+/// information to identify a result; the provider hydrates the matching IDs
+/// in one lightweight request so cards retain artwork and per-user state.
+nonisolated struct JellyfinSearchHintResultDTO: Decodable, Hashable, Sendable {
+    let searchHints: [JellyfinSearchHintDTO]
+    let totalRecordCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case searchHints = "SearchHints"
+        case totalRecordCount = "TotalRecordCount"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        searchHints = try values.decodeIfPresent([JellyfinSearchHintDTO].self, forKey: .searchHints) ?? []
+        totalRecordCount = try values.decodeIfPresent(Int.self, forKey: .totalRecordCount)
+    }
+}
+
+nonisolated struct JellyfinSearchHintDTO: Decodable, Hashable, Sendable {
+    let id: String?
+    let itemID: String?
+    let name: String?
+    let type: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id = "Id"
+        case itemID = "ItemId"
+        case name = "Name"
+        case type = "Type"
+    }
+
+    /// `ItemId` is retained by Jellyfin for compatibility with older clients;
+    /// newer servers populate `Id`. Accept either without leaking that server
+    /// version difference into the rest of the app.
+    var resolvedID: String? {
+        let value = id?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let value, !value.isEmpty { return value }
+        let legacy = itemID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return legacy?.isEmpty == false ? legacy : nil
+    }
+}
+
 /// Standard Jellyfin query result envelope used by `/Items`, user views,
 /// seasons, episodes, search, and recommendation primitives.
 nonisolated struct JellyfinItemQueryResultDTO: Decodable, Hashable, Sendable {

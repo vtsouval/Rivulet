@@ -433,37 +433,149 @@ struct IOSJellyfinSearchView: View {
     @EnvironmentObject private var jellyfin: IOSJellyfinSession
     @State private var query = ""
     @State private var results: [MediaItem] = []
+    @State private var completedTerm: String?
+    @State private var isSearching = false
     @State private var error: String?
+
+    private var term: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var sections: MediaSearchSections { MediaSearchSections(results) }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 118, maximum: 180), spacing: 14)], spacing: 20) {
-                    ForEach(results) { item in
-                        NavigationLink(value: item) { IOSJellyfinPosterCard(item: item) }.buttonStyle(.plain)
+            Group {
+                if term.isEmpty {
+                    ContentUnavailableView(
+                        "Search",
+                        systemImage: "magnifyingglass",
+                        description: Text("Find movies and TV shows.")
+                    )
+                } else if term.count < 2 {
+                    ContentUnavailableView(
+                        "Keep typing",
+                        systemImage: "text.cursor",
+                        description: Text("Enter at least two characters.")
+                    )
+                } else if isSearching && results.isEmpty {
+                    IOSJellyfinSearchLoadingView()
+                        .transition(.opacity)
+                } else if error != nil {
+                    VStack(spacing: 16) {
+                        Image(systemName: "wifi.exclamationmark")
+                            .font(.system(size: 36, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Text("Search is temporarily unavailable")
+                            .font(.title3.bold())
+                        Button("Try Again", systemImage: "arrow.clockwise") {
+                            Task { await search(force: true) }
+                        }
+                        .buttonStyle(.borderedProminent)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if completedTerm == term && sections.isEmpty {
+                    ContentUnavailableView.search(text: term)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 30) {
+                            if !sections.movies.isEmpty {
+                                IOSJellyfinShelf(title: "Movies", items: sections.movies)
+                            }
+                            if !sections.shows.isEmpty {
+                                IOSJellyfinShelf(title: "TV Shows", items: sections.shows)
+                            }
+                        }
+                        .padding(.vertical, 12)
+                    }
+                    .scrollDismissesKeyboard(.interactively)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
-                .padding()
             }
-            .overlay {
-                if query.isEmpty { ContentUnavailableView("Search Jellyfin", systemImage: "magnifyingglass") }
-                if let error { ContentUnavailableView("Search failed", systemImage: "exclamationmark.triangle", description: Text(error)) }
-            }
+            .animation(.snappy(duration: 0.3), value: isSearching)
+            .animation(.snappy(duration: 0.3), value: completedTerm)
             .navigationTitle("Search")
             .toolbar { IOSJellyfinAccountToolbar() }
-            .searchable(text: $query, prompt: "Movies, shows and episodes")
+            .searchable(text: $query, prompt: "Movies and TV shows")
             .navigationDestination(for: MediaItem.self) { IOSJellyfinDetailView(item: $0) }
             .task(id: query) { await search() }
         }
     }
 
-    private func search() async {
-        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard term.count > 1 else { results = []; error = nil; return }
-        try? await Task.sleep(for: .milliseconds(280))
-        guard !Task.isCancelled else { return }
-        do { results = try await jellyfin.search(term); error = nil }
-        catch { self.error = IOSJellyfinSession.message(for: error) }
+    private func search(force: Bool = false) async {
+        let requestedTerm = term
+        guard requestedTerm.count >= 2 else {
+            results = []
+            completedTerm = nil
+            error = nil
+            isSearching = false
+            return
+        }
+
+        withAnimation(.easeOut(duration: 0.16)) {
+            results = []
+            completedTerm = nil
+            error = nil
+            isSearching = true
+        }
+
+        if !force {
+            do { try await Task.sleep(for: .milliseconds(220)) }
+            catch { return }
+        }
+        guard !Task.isCancelled, term == requestedTerm else { return }
+
+        do {
+            let fetched = try await jellyfin.search(requestedTerm)
+            try Task.checkCancellation()
+            guard term == requestedTerm else { return }
+            withAnimation(.snappy(duration: 0.32)) {
+                results = fetched
+                completedTerm = requestedTerm
+                error = nil
+                isSearching = false
+            }
+        } catch is CancellationError {
+            // `.task(id:)` cancels the previous request as the user types.
+            // Cancellation is normal control flow, never a visible error.
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            // Some URLSession paths surface cancellation as URLError.
+        } catch {
+            guard !Task.isCancelled, term == requestedTerm else { return }
+            withAnimation(.easeOut(duration: 0.2)) {
+                self.error = IOSJellyfinSession.message(for: error)
+                completedTerm = requestedTerm
+                isSearching = false
+            }
+        }
+    }
+}
+
+private struct IOSJellyfinSearchLoadingView: View {
+    @State private var isPulsing = false
+
+    var body: some View {
+        VStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(.thinMaterial)
+                    .frame(width: 72, height: 72)
+                    .overlay { Circle().stroke(.white.opacity(0.14), lineWidth: 1) }
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 29, weight: .semibold))
+                    .foregroundStyle(.cyan)
+                    .scaleEffect(isPulsing ? 1.08 : 0.92)
+                    .opacity(isPulsing ? 1 : 0.62)
+            }
+            Text("Searching")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true)) {
+                isPulsing = true
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Searching")
     }
 }
 

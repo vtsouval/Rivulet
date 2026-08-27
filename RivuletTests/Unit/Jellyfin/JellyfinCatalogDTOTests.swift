@@ -98,6 +98,27 @@ final class JellyfinCatalogDTOTests: XCTestCase {
         XCTAssertTrue(empty.items.isEmpty)
     }
 
+    func testSearchHintsPreferModernIDAndAcceptLegacyItemID() throws {
+        let response: JellyfinSearchHintResultDTO = try decode(
+            """
+            {
+              "SearchHints": [
+                {"Id":"movie-1", "ItemId":"legacy-movie-1", "Name":"Arrival", "Type":"Movie"},
+                {"ItemId":"show-1", "Name":"Severance", "Type":"Series"}
+              ],
+              "TotalRecordCount": 2
+            }
+            """
+        )
+
+        XCTAssertEqual(response.totalRecordCount, 2)
+        XCTAssertEqual(response.searchHints.map(\.resolvedID), ["movie-1", "show-1"])
+        XCTAssertEqual(response.searchHints.map(\.type), ["Movie", "Series"])
+
+        let empty: JellyfinSearchHintResultDTO = try decode("{}")
+        XCTAssertTrue(empty.searchHints.isEmpty)
+    }
+
     func testCatalogQueryRoundTripsWithoutLosingNativeFilters() throws {
         let query = JellyfinCatalogQuery(
             kind: .shows,

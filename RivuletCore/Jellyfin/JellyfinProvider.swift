@@ -183,17 +183,56 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty else { return [] }
         return try await jellyfinCall {
-            var items = commonQueryItems
-            items += [
+            // Use Jellyfin's indexed search primitive first. A recursive
+            // `/Items?SearchTerm=...` scan can stall for seconds on large
+            // catalogs (especially through a tunnel) and makes rapid typing
+            // feel broken even when cancellation is handled correctly.
+            let hintQuery = [
+                URLQueryItem(name: "UserId", value: session.user.id),
                 URLQueryItem(name: "SearchTerm", value: term),
-                URLQueryItem(name: "Recursive", value: "true"),
-                URLQueryItem(name: "IncludeItemTypes", value: "Movie,Series,Episode"),
-                URLQueryItem(name: "Limit", value: "60")
+                URLQueryItem(name: "IncludeItemTypes", value: "Movie,Series"),
+                URLQueryItem(name: "IncludeMedia", value: "true"),
+                URLQueryItem(name: "IncludePeople", value: "false"),
+                URLQueryItem(name: "IncludeGenres", value: "false"),
+                URLQueryItem(name: "IncludeStudios", value: "false"),
+                URLQueryItem(name: "IncludeArtists", value: "false"),
+                URLQueryItem(name: "Limit", value: "48")
+            ]
+            let hints: JellyfinSearchHintResultDTO = try await transport.get(
+                "/Search/Hints", queryItems: hintQuery, token: session.accessToken
+            )
+
+            var seen = Set<String>()
+            let ids = hints.searchHints.compactMap { hint -> String? in
+                guard let id = hint.resolvedID,
+                      JellyfinCatalogMapper.kind(hint.type) == .movie
+                        || JellyfinCatalogMapper.kind(hint.type) == .show,
+                      seen.insert(id.lowercased()).inserted else { return nil }
+                return id
+            }
+            guard !ids.isEmpty else { return [] }
+
+            // Hydrate all matches in one direct-ID request. This preserves
+            // Jellyfin artwork and favorite/progress state without repeating
+            // the expensive full-library search. Reorder by hint relevance,
+            // since an `Ids` query is not required to retain input order.
+            let itemQuery = [
+                URLQueryItem(name: "UserId", value: session.user.id),
+                URLQueryItem(name: "Ids", value: ids.joined(separator: ",")),
+                URLQueryItem(name: "Fields", value: "BackdropImageTags,Genres,PremiereDate,Tags"),
+                URLQueryItem(name: "EnableImages", value: "true"),
+                URLQueryItem(name: "EnableUserData", value: "true"),
+                URLQueryItem(name: "ImageTypeLimit", value: "1"),
+                URLQueryItem(name: "EnableImageTypes", value: "Primary,Backdrop,Thumb"),
+                URLQueryItem(name: "Limit", value: String(ids.count))
             ]
             let response: JellyfinItemQueryResultDTO = try await transport.get(
-                "/Items", queryItems: items, token: session.accessToken
+                "/Items", queryItems: itemQuery, token: session.accessToken
             )
-            return map(response.items)
+            let byID = map(response.items).reduce(into: [String: MediaItem]()) {
+                $0[$1.ref.itemID.lowercased()] = $1
+            }
+            return MediaSearchSections(ids.compactMap { byID[$0.lowercased()] }).all
         }
     }
 
