@@ -99,7 +99,12 @@ nonisolated enum JellyfinLiveTVMapper {
             maxWidth: 600,
             quality: 92
         )
-        let group = item.tags.first ?? item.channelType ?? "Jellyfin"
+        // Preserve every server tag. Dispatcharr/Jellyfin lineups commonly put
+        // the country after a genre tag; retaining only the first tag caused
+        // valid regional channels to disappear behind the wrong iOS filter.
+        let group = item.tags.isEmpty
+            ? (item.channelType ?? "Jellyfin")
+            : item.tags.joined(separator: " · ")
         let qualityLabels = ([name] + [item.channelType].compactMap { $0 } + item.tags)
             .joined(separator: " ")
             .lowercased()

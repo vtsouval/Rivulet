@@ -140,6 +140,13 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.6.2 (84)", [
+            "Live TV now loads the complete Jellyfin lineup with safe pagination instead of stopping after the first page",
+            "Greek channel recognition covers ERT, ANT1, MEGA, Star, Alpha, SKAI, OPEN, MAK, Kontra, Vouli, Cosmote and Nova without cross-country EPG overlap",
+            "A native, virtualized TV guide adds timeline navigation, programme details and direct tuning across large lineups",
+            "Channels remain available when guide data is delayed or unavailable, while EPG pages load concurrently in the background",
+            "Live playback adds fast previous and next channel switching, a searchable mini guide and make-before-break stream handoff",
+        ]),
         ("1.6.1 (83)", [
             "Verified and installed on iPhone 17e with live Jellyfin catalogs and episode playback",
             "Trailer controls no longer overlap title actions and embedded provider chrome stays outside the cinematic stage",

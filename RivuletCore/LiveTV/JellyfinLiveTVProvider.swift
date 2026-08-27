@@ -24,6 +24,8 @@ actor JellyfinLiveTVProvider: LiveTVProvider {
 
     private let channelCacheDuration: TimeInterval = 5 * 60
     private let epgCacheDuration: TimeInterval = 5 * 60
+    private let channelPageSize = 250
+    private let programPageSize = 500
 
     init(session: JellyfinAuthenticatedSession) throws {
         let transport = try JellyfinTransport(
@@ -67,22 +69,43 @@ actor JellyfinLiveTVProvider: LiveTVProvider {
     }
 
     func refreshChannels() async throws -> [UnifiedChannel] {
-        let response: JellyfinLiveTVQueryResultDTO = try await transport.get(
-            "/LiveTv/Channels",
-            queryItems: [
-                URLQueryItem(name: "UserId", value: session.user.id),
-                URLQueryItem(name: "StartIndex", value: "0"),
-                URLQueryItem(name: "Limit", value: "10000"),
-                URLQueryItem(name: "EnableImages", value: "true"),
-                URLQueryItem(name: "EnableUserData", value: "true"),
-                URLQueryItem(name: "Fields", value: "ChannelType,Genres,Tags")
-            ],
-            token: session.accessToken
-        )
+        var items: [JellyfinLiveTVItemDTO] = []
+        var seenIDs = Set<String>()
+        var startIndex = 0
 
-        let channels = response.items.compactMap {
+        while true {
+            let response: JellyfinLiveTVQueryResultDTO = try await transport.get(
+                "/LiveTv/Channels",
+                queryItems: [
+                    URLQueryItem(name: "UserId", value: session.user.id),
+                    URLQueryItem(name: "StartIndex", value: String(startIndex)),
+                    URLQueryItem(name: "Limit", value: String(channelPageSize)),
+                    URLQueryItem(name: "EnableImages", value: "true"),
+                    URLQueryItem(name: "EnableUserData", value: "true"),
+                    URLQueryItem(name: "Fields", value: "ChannelType,Genres,Tags")
+                ],
+                token: session.accessToken
+            )
+
+            let newItems = response.items.filter { item in
+                guard let id = item.id, !id.isEmpty else { return true }
+                return seenIDs.insert(id).inserted
+            }
+            items.append(contentsOf: newItems)
+            startIndex += response.items.count
+
+            let hasAnotherPage = response.totalRecordCount.map { startIndex < $0 }
+                ?? (response.items.count == channelPageSize)
+            guard !response.items.isEmpty, hasAnotherPage, !newItems.isEmpty else { break }
+        }
+
+        let channels = items.compactMap {
             JellyfinLiveTVMapper.channel($0, sourceID: sourceId, imageBuilder: imageBuilder)
         }
+            .sorted {
+                ($0.channelNumber ?? Int.max, $0.name.localizedLowercase)
+                    < ($1.channelNumber ?? Int.max, $1.name.localizedLowercase)
+            }
         guard !channels.isEmpty else { throw LiveTVProviderError.noChannelsFound }
         cachedChannels = channels
         lastChannelFetch = Date()
@@ -104,11 +127,11 @@ actor JellyfinLiveTVProvider: LiveTVProvider {
             return filteredEPG(cachedEPG, channels: channels, startDate: startDate, endDate: endDate)
         }
 
-        let channelLookup = Dictionary(
-            uniqueKeysWithValues: channels.compactMap { channel in
-                channel.tvgId.map { ($0, channel.id) }
-            }
-        )
+        var channelLookup: [String: [String]] = [:]
+        for channel in channels {
+            guard let rawID = channel.tvgId, !rawID.isEmpty else { continue }
+            channelLookup[rawID, default: []].append(channel.id)
+        }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let start = formatter.string(from: startDate)
@@ -118,42 +141,39 @@ actor JellyfinLiveTVProvider: LiveTVProvider {
         // fetching a large lineup in a handful of parallel requests.
         let chunks = channelLookup.keys.sorted().chunked(maxCount: 80)
         let responses = try await withThrowingTaskGroup(
-            of: JellyfinLiveTVQueryResultDTO.self,
-            returning: [JellyfinLiveTVQueryResultDTO].self
+            of: [JellyfinLiveTVItemDTO].self,
+            returning: [[JellyfinLiveTVItemDTO]].self
         ) { group in
             for ids in chunks {
-                group.addTask { [transport, session] in
-                    try await transport.get(
-                        "/LiveTv/Programs",
-                        queryItems: [
-                            URLQueryItem(name: "UserId", value: session.user.id),
-                            URLQueryItem(name: "ChannelIds", value: ids.joined(separator: ",")),
-                            URLQueryItem(name: "MinStartDate", value: start),
-                            URLQueryItem(name: "MaxEndDate", value: end),
-                            URLQueryItem(name: "EnableImages", value: "true"),
-                            URLQueryItem(name: "EnableUserData", value: "true"),
-                            URLQueryItem(name: "Fields", value: "ChannelId,Genres,Tags,Overview")
-                        ],
-                        token: session.accessToken
+                group.addTask { [transport, session, programPageSize] in
+                    try await Self.fetchProgramPages(
+                        transport: transport,
+                        session: session,
+                        channelIDs: ids,
+                        start: start,
+                        end: end,
+                        pageSize: programPageSize
                     )
                 }
             }
-            var values: [JellyfinLiveTVQueryResultDTO] = []
+            var values: [[JellyfinLiveTVItemDTO]] = []
             for try await response in group { values.append(response) }
             return values
         }
 
         var programs: [String: [UnifiedProgram]] = [:]
         for response in responses {
-            for item in response.items {
+            for item in response {
                 guard let rawChannelID = item.channelID,
-                      let unifiedChannelID = channelLookup[rawChannelID],
-                      let program = JellyfinLiveTVMapper.program(
+                      let unifiedChannelIDs = channelLookup[rawChannelID] else { continue }
+                for unifiedChannelID in unifiedChannelIDs {
+                    guard let program = JellyfinLiveTVMapper.program(
                         item,
                         unifiedChannelID: unifiedChannelID,
                         imageBuilder: imageBuilder
-                      ) else { continue }
-                programs[unifiedChannelID, default: []].append(program)
+                    ) else { continue }
+                    programs[unifiedChannelID, default: []].append(program)
+                }
             }
         }
         for channelID in programs.keys {
@@ -273,6 +293,49 @@ actor JellyfinLiveTVProvider: LiveTVProvider {
             let programs = entry.value.filter { $0.endTime > startDate && $0.startTime < endDate }
             if !programs.isEmpty { result[entry.key] = programs }
         }
+    }
+
+    private nonisolated static func fetchProgramPages(
+        transport: JellyfinTransport,
+        session: JellyfinAuthenticatedSession,
+        channelIDs: [String],
+        start: String,
+        end: String,
+        pageSize: Int
+    ) async throws -> [JellyfinLiveTVItemDTO] {
+        var items: [JellyfinLiveTVItemDTO] = []
+        var seenIDs = Set<String>()
+        var startIndex = 0
+
+        while true {
+            let response: JellyfinLiveTVQueryResultDTO = try await transport.get(
+                "/LiveTv/Programs",
+                queryItems: [
+                    URLQueryItem(name: "UserId", value: session.user.id),
+                    URLQueryItem(name: "ChannelIds", value: channelIDs.joined(separator: ",")),
+                    URLQueryItem(name: "MinStartDate", value: start),
+                    URLQueryItem(name: "MaxEndDate", value: end),
+                    URLQueryItem(name: "StartIndex", value: String(startIndex)),
+                    URLQueryItem(name: "Limit", value: String(pageSize)),
+                    URLQueryItem(name: "EnableImages", value: "true"),
+                    URLQueryItem(name: "EnableUserData", value: "true"),
+                    URLQueryItem(name: "Fields", value: "ChannelId,Genres,Tags,Overview")
+                ],
+                token: session.accessToken
+            )
+
+            let newItems = response.items.filter { item in
+                guard let id = item.id, !id.isEmpty else { return true }
+                return seenIDs.insert(id).inserted
+            }
+            items.append(contentsOf: newItems)
+            startIndex += response.items.count
+
+            let hasAnotherPage = response.totalRecordCount.map { startIndex < $0 }
+                ?? (response.items.count == pageSize)
+            guard !response.items.isEmpty, hasAnotherPage, !newItems.isEmpty else { break }
+        }
+        return items
     }
 
     #if targetEnvironment(macCatalyst)
