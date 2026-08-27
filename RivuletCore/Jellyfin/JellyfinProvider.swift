@@ -297,7 +297,11 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
             var query = commonQueryItems
             query += [
                 URLQueryItem(name: "Limit", value: String(max(1, limit))),
-                URLQueryItem(name: "MediaTypes", value: "Video")
+                URLQueryItem(name: "MediaTypes", value: "Video"),
+                URLQueryItem(name: "Recursive", value: "true"),
+                URLQueryItem(name: "EnableTotalRecordCount", value: "false"),
+                URLQueryItem(name: "ImageTypeLimit", value: "1"),
+                URLQueryItem(name: "EnableImageTypes", value: "Primary,Backdrop,Thumb")
             ]
             let response: JellyfinItemQueryResultDTO = try await transport.get(
                 "/Users/\(session.user.id)/Items/Resume", queryItems: query, token: session.accessToken
@@ -320,25 +324,9 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         }
     }
 
-    func nextUp(limit: Int) async throws -> [MediaItem] {
-        try await jellyfinCall {
-            var query = commonQueryItems
-            query += [
-                URLQueryItem(name: "Limit", value: String(max(1, limit))),
-                URLQueryItem(name: "EnableResumable", value: "false"),
-                URLQueryItem(name: "DisableFirstEpisode", value: "false")
-            ]
-            let response: JellyfinItemQueryResultDTO = try await transport.get(
-                "/Shows/NextUp", queryItems: query, token: session.accessToken
-            )
-            return map(response.items)
-        }
-    }
-
     func hubs() async throws -> [MediaHub] {
         async let preferences = synchronizedPreferences()
         async let resumed = optionalItems { try await self.continueWatching(limit: 24) }
-        async let upNext = optionalItems { try await self.nextUp(limit: 24) }
         async let recentMovies = optionalCatalog(JellyfinCatalogQuery(kind: .movies), limit: 30)
         async let recentShows = optionalCatalog(JellyfinCatalogQuery(kind: .shows), limit: 30)
         async let favoriteMovies = optionalCatalog(
@@ -370,12 +358,12 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         async let becauseMovies = optionalRecommendations(itemType: "Movie", mode: "because", limit: 20)
 
         let (
-            synced, continueItems, nextItems, movieItems, showItems,
+            synced, continueItems, movieItems, showItems,
             movieFavorites, ratedMovies, ratedShows, showFavorites,
             movieWatchlist, showWatchlist, upcomingMovieItems, upcomingShowItems,
             moviePicks, showPicks, because
         ) = await (
-            preferences, resumed, upNext, recentMovies, recentShows,
+            preferences, resumed, recentMovies, recentShows,
             favoriteMovies, topMovies, topShows, favoriteShows,
             watchlistMovies, watchlistShows, upcomingMovies, upcomingShows,
             recommendedMovies, recommendedShows, becauseMovies
@@ -388,9 +376,6 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         var result: [MediaHub] = []
         if !continueItems.isEmpty {
             result.append(MediaHub(id: "\(id):continue", providerID: id, title: "Continue Watching", style: .shelf, items: visible(continueItems)))
-        }
-        if !nextItems.isEmpty {
-            result.append(MediaHub(id: "\(id):next", providerID: id, title: "Next Up", style: .shelf, items: visible(nextItems)))
         }
         let personalPicks = visible(interleaved(moviePicks.items, showPicks.items)).prefix(24)
         if !personalPicks.isEmpty {

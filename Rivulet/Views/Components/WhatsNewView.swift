@@ -140,6 +140,13 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.6.5 (87)", [
+            "Home now has one authoritative Continue Watching shelf; the separate Jellyfin Next Up request and duplicate rail are gone",
+            "Continue Watching uses cinematic landscape cards with TV show, episode title, season and episode position, time remaining and progress",
+            "Resume state comes directly from the active Jellyfin user and refreshes after playback, when Home appears and when the app returns to the foreground",
+            "Playback stop is committed before the home rail refreshes, keeping the exact episode and timestamp consistent across Jellyfin devices",
+            "Older cached Next Up rails are removed during session restoration, so the simplified home appears immediately after launch",
+        ]),
         ("1.6.4 (86)", [
             "Detail-page trailers pause when their hero leaves view and resume from the same moment when it returns",
             "Trailer playback is one-shot: completion restores the title artwork instead of looping or showing replay chrome",

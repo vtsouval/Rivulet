@@ -45,6 +45,55 @@ extension MediaItem {
         return "\(totalMinutes)m"
     }
 
+    /// Primary line for a native Continue Watching card. Episodes lead with
+    /// their series so a row of mixed shows remains scannable; movies keep
+    /// their own title.
+    var continueWatchingTitle: String {
+        if kind == .episode,
+           let seriesTitle = seriesTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !seriesTitle.isEmpty {
+            return seriesTitle
+        }
+        return title
+    }
+
+    /// Episode name shown independently from its series. This avoids the
+    /// ambiguous Jellyfin default where Continue Watching can say only
+    /// "S1 E4" or only the episode name.
+    var continueWatchingSubtitle: String? {
+        guard kind == .episode else { return nil }
+        let value = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty || value == continueWatchingTitle ? nil : value
+    }
+
+    /// Compact Apple-style hierarchy and remaining time, for example
+    /// "S2, E4 · 18m left". Movies use only the remaining time.
+    var continueWatchingProgressLabel: String? {
+        let values = [episodeCoordinate, remainingTimeFormatted]
+            .compactMap { value -> String? in
+                guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !value.isEmpty else { return nil }
+                return value
+            }
+        return values.isEmpty ? nil : values.joined(separator: "  ·  ")
+    }
+
+    /// Time remaining at the server-provided resume point. Keeping this a
+    /// derivation of Jellyfin user data means every signed-in device presents
+    /// the same value instead of maintaining a second local history.
+    var remainingTimeFormatted: String? {
+        guard let runtime, runtime > 0, userState.viewOffset > 0 else { return nil }
+        let remaining = max(0, runtime - userState.viewOffset)
+        guard remaining > 0 else { return nil }
+        let minutes = max(1, Int(ceil(remaining / 60)))
+        if minutes >= 60 {
+            let hours = minutes / 60
+            let remainder = minutes % 60
+            return remainder == 0 ? "\(hours)h left" : "\(hours)h \(remainder)m left"
+        }
+        return "\(minutes)m left"
+    }
+
     /// "S01E03"-style label for episodes; nil for non-episodes.
     var episodeString: String? {
         guard kind == .episode,

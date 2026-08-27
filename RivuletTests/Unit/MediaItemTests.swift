@@ -102,4 +102,43 @@ final class MediaItemTests: XCTestCase {
         XCTAssertFalse(base.isAnime)
         XCTAssertTrue(anime.isAnime)
     }
+
+    func test_continueWatchingEpisodeUsesSeriesEpisodeCoordinateAndRemainingTime() {
+        let item = MediaItem(
+            ref: MediaItemRef(providerID: "jellyfin:server", itemID: "episode-7"),
+            kind: .episode, title: "The Crossing", sortTitle: nil, overview: nil,
+            year: 2026, runtime: 2_700, parentRef: nil, grandparentRef: nil,
+            episodeNumber: 7, seasonNumber: 1, childProgress: nil,
+            userState: MediaUserState(
+                isPlayed: false, viewOffset: 1_620, isFavorite: false, lastViewedAt: Date()
+            ),
+            artwork: MediaArtwork(poster: nil, backdrop: nil, thumbnail: nil, logo: nil),
+            parentArtwork: nil, grandparentArtwork: nil,
+            seriesTitle: "Northern Lights", seasonTitle: "Season 1"
+        )
+
+        XCTAssertEqual(item.continueWatchingTitle, "Northern Lights")
+        XCTAssertEqual(item.continueWatchingSubtitle, "The Crossing")
+        XCTAssertEqual(item.remainingTimeFormatted, "18m left")
+        XCTAssertEqual(item.continueWatchingProgressLabel, "S1, E7  ·  18m left")
+        XCTAssertEqual(item.watchProgress ?? -1, 0.6, accuracy: 0.001)
+    }
+
+    func test_continueWatchingMovieKeepsMovieTitleAndUsesHoursRemaining() {
+        let item = MediaItem(
+            ref: MediaItemRef(providerID: "jellyfin:server", itemID: "movie"),
+            kind: .movie, title: "Arrival", sortTitle: nil, overview: nil,
+            year: 2016, runtime: 7_200, parentRef: nil, grandparentRef: nil,
+            episodeNumber: nil, seasonNumber: nil, childProgress: nil,
+            userState: MediaUserState(
+                isPlayed: false, viewOffset: 1_200, isFavorite: false, lastViewedAt: Date()
+            ),
+            artwork: MediaArtwork(poster: nil, backdrop: nil, thumbnail: nil, logo: nil),
+            parentArtwork: nil, grandparentArtwork: nil
+        )
+
+        XCTAssertEqual(item.continueWatchingTitle, "Arrival")
+        XCTAssertNil(item.continueWatchingSubtitle)
+        XCTAssertEqual(item.continueWatchingProgressLabel, "1h 40m left")
+    }
 }

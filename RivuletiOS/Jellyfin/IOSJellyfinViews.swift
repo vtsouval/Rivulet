@@ -181,6 +181,8 @@ struct IOSJellyfinSignInView: View {
 }
 
 struct IOSJellyfinRootView: View {
+    @EnvironmentObject private var jellyfin: IOSJellyfinSession
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab = "home"
 
     var body: some View {
@@ -200,6 +202,10 @@ struct IOSJellyfinRootView: View {
         .tabBarMinimizeBehavior(.onScrollDown)
         .tint(.cyan)
         .preferredColorScheme(.dark)
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await jellyfin.refreshContinueWatching() }
+        }
     }
 }
 
@@ -237,7 +243,11 @@ struct IOSJellyfinHomeView: View {
                                 IOSJellyfinHero(item: hero)
                             }
                             ForEach(visibleHubs) { hub in
-                                IOSJellyfinShelf(title: hub.title, items: hub.items)
+                                if hub.title == "Continue Watching" {
+                                    IOSJellyfinContinueWatchingShelf(items: hub.items)
+                                } else {
+                                    IOSJellyfinShelf(title: hub.title, items: hub.items)
+                                }
                             }
                             if mode == .discover {
                                 IOSJellyfinDiscoveryGenreShelves()
@@ -246,6 +256,7 @@ struct IOSJellyfinHomeView: View {
                         .padding(.bottom, 30)
                     }
                     .refreshable { await jellyfin.refresh() }
+                    .task { await jellyfin.refreshContinueWatching() }
                 }
             }
             .navigationTitle(mode.rawValue)
@@ -259,7 +270,6 @@ struct IOSJellyfinHomeView: View {
         case .home:
             let values = jellyfin.homeHubs.filter {
                 $0.title == "Continue Watching"
-                    || $0.title == "Next Up"
                     || $0.title == "Top Picks for You"
                     || $0.title == "Director’s Picks"
                     || $0.title.hasPrefix("Favorite")
@@ -576,6 +586,110 @@ struct IOSJellyfinShelf: View {
             }
             .scrollIndicators(.hidden)
         }
+    }
+}
+
+/// A distinct landscape rail for in-progress playback. The card mirrors the
+/// hierarchy of Apple's TV app while retaining Jellyfin as the sole source of
+/// progress, so iPhone, iPad, Apple TV, web and third-party clients converge on
+/// the same episode and timestamp.
+struct IOSJellyfinContinueWatchingShelf: View {
+    let items: [MediaItem]
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private var cardWidth: CGFloat { horizontalSizeClass == .regular ? 360 : 292 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Continue Watching")
+                .font(.title2.bold())
+                .padding(.horizontal)
+            ScrollView(.horizontal) {
+                LazyHStack(alignment: .top, spacing: 14) {
+                    ForEach(items) { item in
+                        NavigationLink(value: item) {
+                            IOSJellyfinContinueWatchingCard(item: item, width: cardWidth)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal)
+            }
+            .scrollIndicators(.hidden)
+        }
+    }
+}
+
+struct IOSJellyfinContinueWatchingCard: View {
+    let item: MediaItem
+    let width: CGFloat
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            IOSJellyfinArtwork(url: artworkURL, aspectRatio: 16 / 9)
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0.32),
+                    .init(color: .black.opacity(0.38), location: 0.62),
+                    .init(color: .black.opacity(0.94), location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.continueWatchingTitle)
+                    .font(.headline.weight(.bold))
+                    .lineLimit(1)
+                if let subtitle = item.continueWatchingSubtitle {
+                    Text(subtitle)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.86))
+                        .lineLimit(1)
+                }
+                HStack(spacing: 7) {
+                    Image(systemName: "play.fill")
+                        .font(.caption.weight(.bold))
+                    if let label = item.continueWatchingProgressLabel {
+                        Text(label).lineLimit(1)
+                    }
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.82))
+                if let progress = item.watchProgress {
+                    ProgressView(value: progress)
+                        .progressViewStyle(.linear)
+                        .tint(.white)
+                        .accessibilityLabel("Playback progress")
+                        .accessibilityValue(Text("\(Int(progress * 100)) percent"))
+                }
+            }
+            .padding(14)
+        }
+        .frame(width: width)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(.white.opacity(0.13), lineWidth: 1)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityTitle)
+        .accessibilityHint("Opens this title at your saved position")
+    }
+
+    private var artworkURL: URL? {
+        item.artwork.thumbnail
+            ?? item.artwork.backdrop
+            ?? item.grandparentArtwork?.backdrop
+            ?? item.parentArtwork?.backdrop
+            ?? item.artwork.poster
+            ?? item.grandparentArtwork?.poster
+    }
+
+    private var accessibilityTitle: String {
+        [item.continueWatchingTitle, item.continueWatchingSubtitle, item.continueWatchingProgressLabel]
+            .compactMap { $0 }
+            .joined(separator: ", ")
     }
 }
 

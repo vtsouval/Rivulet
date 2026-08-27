@@ -40,6 +40,7 @@ final class IOSJellyfinSession: ObservableObject {
     private var genreCache: [JellyfinCatalogKind: [JellyfinCatalogGenre]] = [:]
     private var catalogTasks: [JellyfinCatalogQuery: Task<PagedResult<MediaItem>, Error>] = [:]
     private var refreshTask: Task<Void, Never>?
+    private var continueWatchingRefreshTask: Task<Void, Never>?
     private var restoreTask: Task<Void, Never>?
 
     var isConfigured: Bool { provider != nil }
@@ -296,6 +297,48 @@ final class IOSJellyfinSession: ObservableObject {
         refreshTask = nil
     }
 
+    /// Refreshes the one home rail whose state can change on another device.
+    /// Jellyfin owns the progress and resume point; this client merely paints
+    /// the current authenticated user's `/Items/Resume` response.
+    func refreshContinueWatching() async {
+        guard provider != nil else { return }
+        if let refreshTask {
+            await refreshTask.value
+            return
+        }
+        if let continueWatchingRefreshTask {
+            await continueWatchingRefreshTask.value
+            return
+        }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performContinueWatchingRefresh()
+        }
+        continueWatchingRefreshTask = task
+        await task.value
+        continueWatchingRefreshTask = nil
+    }
+
+    private func performContinueWatchingRefresh() async {
+        guard let provider,
+              let fetched = try? await provider.continueWatching(limit: 24) else { return }
+        let showAnime = (UserDefaults.standard.object(forKey: "ios.showAnime") as? Bool) ?? true
+        let items = showAnime ? fetched : fetched.filter { !$0.isAnime }
+        let continueHub = items.isEmpty ? nil : MediaHub(
+            id: "\(provider.id):continue",
+            providerID: provider.id,
+            title: "Continue Watching",
+            style: .shelf,
+            items: items
+        )
+        var updated = homeHubs.filter {
+            $0.title != "Continue Watching" && $0.title != "Next Up"
+        }
+        if let continueHub { updated.insert(continueHub, at: 0) }
+        homeHubs = updated
+        saveSnapshot()
+    }
+
     private func performRefresh() async {
         guard let provider else { return }
         isRefreshing = true
@@ -310,7 +353,7 @@ final class IOSJellyfinSession: ObservableObject {
             )
             apply(preferences)
             self.libraries = libraries
-            self.homeHubs = hubs
+            self.homeHubs = Self.sanitizedHomeHubs(hubs)
             state = .connected
             saveSnapshot()
 
@@ -479,7 +522,7 @@ final class IOSJellyfinSession: ObservableObject {
         apply(try await provider.updateContentPreferences(patch))
         // Discovery shelves may include Anime or trailer-derived presentation;
         // rebuild them immediately after a cross-client preference change.
-        homeHubs = try await provider.hubs()
+        homeHubs = Self.sanitizedHomeHubs(try await provider.hubs())
         saveSnapshot()
     }
 
@@ -526,7 +569,7 @@ final class IOSJellyfinSession: ObservableObject {
             userID: session.user.id
         ) else { return }
         libraries = snapshot.libraries
-        homeHubs = snapshot.homeHubs
+        homeHubs = Self.sanitizedHomeHubs(snapshot.homeHubs)
         for (key, items) in snapshot.catalogs {
             guard let request = Self.catalogRequest(from: key) else { continue }
             catalogCache[request] = PagedResult(
@@ -554,6 +597,10 @@ final class IOSJellyfinSession: ObservableObject {
             server: session.serverURL,
             userID: session.user.id
         )
+    }
+
+    private static func sanitizedHomeHubs(_ hubs: [MediaHub]) -> [MediaHub] {
+        hubs.filter { $0.title != "Next Up" }
     }
 
     private static func catalogKey(for request: JellyfinCatalogQuery) -> String {
@@ -632,6 +679,8 @@ final class IOSJellyfinSession: ObservableObject {
         genreCache = [:]
         catalogTasks.values.forEach { $0.cancel() }
         catalogTasks = [:]
+        continueWatchingRefreshTask?.cancel()
+        continueWatchingRefreshTask = nil
         quickConnectCode = nil
         quickConnectPayloadURL = nil
         self.state = state

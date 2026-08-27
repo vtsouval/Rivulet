@@ -381,7 +381,8 @@ struct IOSJellyfinDetailView: View {
                 stream: stream,
                 provider: provider,
                 followingEpisodes: following,
-                chapters: await playbackDetail?.chapters ?? []
+                chapters: await playbackDetail?.chapters ?? [],
+                onProgressCommitted: { await jellyfin.refreshContinueWatching() }
             )
         } catch { self.error = IOSJellyfinSession.message(for: error) }
     }

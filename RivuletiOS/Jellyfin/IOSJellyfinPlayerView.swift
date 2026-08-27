@@ -12,19 +12,22 @@ struct IOSJellyfinPlaybackContext: Identifiable {
     let provider: JellyfinProvider
     let followingEpisodes: [MediaItem]
     let chapters: [MediaChapter]
+    let onProgressCommitted: @MainActor @Sendable () async -> Void
 
     init(
         item: MediaItem,
         stream: StreamInfo,
         provider: JellyfinProvider,
         followingEpisodes: [MediaItem] = [],
-        chapters: [MediaChapter] = []
+        chapters: [MediaChapter] = [],
+        onProgressCommitted: @escaping @MainActor @Sendable () async -> Void = {}
     ) {
         self.item = item
         self.stream = stream
         self.provider = provider
         self.followingEpisodes = followingEpisodes
         self.chapters = chapters
+        self.onProgressCommitted = onProgressCommitted
     }
 }
 
@@ -159,7 +162,10 @@ struct IOSJellyfinPlayerView: View {
             let position = player.sourceTime
             player.stop()
             let reporter = context.provider.progressReporter(for: currentItem.ref, streamInfo: currentStream)
-            Task { await reporter.stopped(at: position) }
+            Task {
+                await reporter.stopped(at: position)
+                await context.onProgressCommitted()
+            }
             Task { await watchTogether.disconnect(leavingGroup: true) }
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -470,6 +476,9 @@ struct IOSJellyfinPlayerView: View {
             try IOSMediaAudioSession.activateForVideo()
             let reporter = context.provider.progressReporter(for: currentItem.ref, streamInfo: currentStream)
             await reporter.start()
+            if currentItem.userState.viewOffset > 0 {
+                await reporter.progress(position: currentItem.userState.viewOffset)
+            }
             try await player.load(
                 url: url,
                 headers: currentStream.requestHeaders,
