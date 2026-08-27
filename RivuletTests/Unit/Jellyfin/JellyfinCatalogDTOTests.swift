@@ -153,6 +153,25 @@ final class JellyfinCatalogDTOTests: XCTestCase {
         XCTAssertFalse(filtered.contains { $0.name == "Korean" })
     }
 
+    func testHomeCarouselContinuationPreservesShelfSemantics() throws {
+        let watchlist = try XCTUnwrap(
+            JellyfinHomeCarouselContinuation.request(for: "Movie Watchlist")
+        )
+        XCTAssertEqual(watchlist.kind, .movies)
+        XCTAssertEqual(watchlist.filter, .watchlist)
+        XCTAssertEqual(watchlist.sort, .addedAtDesc)
+
+        let studio = try XCTUnwrap(
+            JellyfinHomeCarouselContinuation.request(for: "Apple TV · TV Shows")
+        )
+        XCTAssertEqual(studio.kind, .shows)
+        XCTAssertEqual(studio.studios, ["Apple TV+", "Apple Studios"])
+        XCTAssertEqual(studio.sort, .releaseDateDesc)
+
+        XCTAssertNil(JellyfinHomeCarouselContinuation.request(for: "Top Picks for You"))
+        XCTAssertNil(JellyfinHomeCarouselContinuation.request(for: "Because You Watched Arrival"))
+    }
+
     private func decode<T: Decodable>(_ json: String) throws -> T {
         try JSONDecoder().decode(T.self, from: Data(json.utf8))
     }

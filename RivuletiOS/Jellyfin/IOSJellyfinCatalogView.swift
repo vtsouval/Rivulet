@@ -30,33 +30,15 @@ struct IOSJellyfinCatalogView: View {
                     if filter == .all, genre == nil, !genres.isEmpty {
                         IOSJellyfinCatalogGenreShelves(kind: kind, genres: genres)
                     }
-                    if !items.isEmpty {
-                        HStack {
-                            Text(gridTitle).font(.title2.bold())
-                            Spacer()
-                        }
-                        .padding(.horizontal)
-                    }
                     if items.isEmpty, isLoading {
-                        skeleton
+                        IOSJellyfinShelfSkeleton(title: carouselTitle)
                     } else {
-                        LazyVGrid(
-                            columns: [GridItem(.adaptive(minimum: 145, maximum: 220), spacing: 16)],
-                            spacing: 22
-                        ) {
-                            ForEach(items) { item in
-                                NavigationLink(value: item) {
-                                    IOSJellyfinPosterCard(item: item, width: nil)
-                                }
-                                .buttonStyle(.plain)
-                                .onAppear { prefetchIfNeeded(item) }
-                            }
-                        }
-                        .padding(.horizontal)
-                    }
-
-                    if isLoadingMore {
-                        ProgressView().controlSize(.small).padding(.vertical, 22)
+                        IOSJellyfinShelf(
+                            title: carouselTitle,
+                            items: items,
+                            onItemAppear: prefetchIfNeeded,
+                            isLoadingMore: isLoadingMore
+                        )
                     }
                 }
                 .padding(.bottom, 32)
@@ -82,7 +64,7 @@ struct IOSJellyfinCatalogView: View {
         }
     }
 
-    private var gridTitle: String {
+    private var carouselTitle: String {
         if let genre { return genre.name }
         if filter != .all { return filter.title }
         return sort == .addedAtDesc ? "Recently Added" : sort.title
@@ -168,16 +150,6 @@ struct IOSJellyfinCatalogView: View {
         .background(selected ? Color.white : Color.clear, in: Capsule())
         .glassEffect(.regular.interactive(), in: .capsule)
         .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    private var skeleton: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 145, maximum: 220), spacing: 16)], spacing: 20) {
-            ForEach(0..<12, id: \.self) { _ in
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(.white.opacity(0.07)).aspectRatio(2 / 3, contentMode: .fit)
-            }
-        }
-        .padding(.horizontal).redacted(reason: .placeholder)
     }
 
     private func load(force: Bool) async {

@@ -303,6 +303,14 @@ struct IOSJellyfinHomeView: View {
                             ForEach(visibleHubs) { hub in
                                 if hub.title == "Continue Watching" {
                                     IOSJellyfinContinueWatchingShelf(items: hub.items)
+                                } else if let request = JellyfinHomeCarouselContinuation.request(
+                                    for: hub.title
+                                ) {
+                                    IOSJellyfinPagedCatalogShelf(
+                                        title: hub.title,
+                                        request: request,
+                                        seedItems: hub.items
+                                    )
                                 } else {
                                     IOSJellyfinShelf(title: hub.title, items: hub.items)
                                 }
@@ -344,6 +352,7 @@ struct IOSJellyfinHomeView: View {
         if case .failed(let message) = jellyfin.state { return message }
         return "Pull to refresh your libraries."
     }
+
 }
 
 private struct IOSJellyfinDiscoveryGenreShelves: View {
@@ -446,23 +455,48 @@ private struct IOSJellyfinLibraryView: View {
     @State private var error: String?
 
     var body: some View {
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 118, maximum: 180), spacing: 14)], spacing: 20) {
-                ForEach(items) { item in
-                    NavigationLink(value: item) { IOSJellyfinPosterCard(item: item) }
-                        .buttonStyle(.plain)
+        Group {
+            if let catalogKind = library.catalogKind {
+                ScrollView {
+                    IOSJellyfinPagedCatalogShelf(
+                        title: "Recently Added",
+                        request: JellyfinCatalogQuery(
+                            kind: catalogKind,
+                            libraryID: library.id,
+                            sort: .addedAtDesc
+                        )
+                    )
+                    .padding(.vertical)
+                }
+            } else {
+                ScrollView {
+                    IOSJellyfinShelf(title: library.title, items: items)
+                        .padding(.vertical)
                 }
             }
-            .padding()
         }
         .overlay {
-            if items.isEmpty, error == nil { ProgressView() }
-            if let error { ContentUnavailableView("Couldn’t load library", systemImage: "exclamationmark.triangle", description: Text(error)) }
+            if library.catalogKind == nil {
+                if items.isEmpty, error == nil { ProgressView() }
+                if let error {
+                    ContentUnavailableView(
+                        "Couldn’t load library",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text(error)
+                    )
+                }
+            }
         }
         .navigationTitle(library.title)
         .navigationDestination(for: MediaItem.self) { IOSJellyfinDetailView(item: $0) }
-        .task { await load() }
-        .refreshable { await load(force: true) }
+        .task {
+            guard library.catalogKind == nil else { return }
+            await load()
+        }
+        .refreshable {
+            guard library.catalogKind == nil else { return }
+            await load(force: true)
+        }
     }
 
     private func load(force: Bool = false) async {
@@ -721,6 +755,7 @@ struct IOSJellyfinShelf: View {
     let title: String
     let items: [MediaItem]
     var onItemAppear: ((MediaItem) -> Void)? = nil
+    var isLoadingMore = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     private var posterWidth: CGFloat { horizontalSizeClass == .regular ? 190 : 156 }
@@ -737,10 +772,65 @@ struct IOSJellyfinShelf: View {
                         .buttonStyle(.plain)
                         .onAppear { onItemAppear?(item) }
                     }
+                    if isLoadingMore {
+                        IOSJellyfinPosterPlaceholder(width: posterWidth)
+                            .transition(.opacity)
+                            .accessibilityLabel("Loading more \(title.lowercased())")
+                    }
+                }
+                .padding(.horizontal)
+                .scrollTargetLayout()
+            }
+            .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.viewAligned(limitBehavior: .alwaysByOne))
+        }
+    }
+}
+
+/// A stable horizontal placeholder keeps the page geometry unchanged while a
+/// catalog's first page or next page is arriving. This avoids the temporary
+/// vertical-grid flash that previously appeared before the real carousel.
+struct IOSJellyfinShelfSkeleton: View {
+    let title: String
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private var posterWidth: CGFloat { horizontalSizeClass == .regular ? 190 : 156 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.title2.bold())
+                .padding(.horizontal)
+            ScrollView(.horizontal) {
+                LazyHStack(alignment: .top, spacing: 14) {
+                    ForEach(0..<6, id: \.self) { _ in
+                        IOSJellyfinPosterPlaceholder(width: posterWidth)
+                    }
                 }
                 .padding(.horizontal)
             }
+            .scrollDisabled(true)
             .scrollIndicators(.hidden)
+        }
+        .redacted(reason: .placeholder)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct IOSJellyfinPosterPlaceholder: View {
+    let width: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .fill(.white.opacity(0.07))
+                .frame(width: width, height: width * 1.5)
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(.white.opacity(0.07))
+                .frame(width: width * 0.72, height: 14)
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(.white.opacity(0.05))
+                .frame(width: width * 0.34, height: 10)
         }
     }
 }
@@ -751,27 +841,45 @@ struct IOSJellyfinShelf: View {
 struct IOSJellyfinPagedCatalogShelf: View {
     let title: String
     let request: JellyfinCatalogQuery
+    var seedItems: [MediaItem] = []
 
     @EnvironmentObject private var jellyfin: IOSJellyfinSession
     @State private var items: [MediaItem] = []
     @State private var hasMore = true
+    @State private var isLoadingInitial = true
     @State private var isLoadingMore = false
 
     var body: some View {
         Group {
             if !items.isEmpty {
-                IOSJellyfinShelf(title: title, items: items, onItemAppear: loadMoreIfNeeded)
+                IOSJellyfinShelf(
+                    title: title,
+                    items: items,
+                    onItemAppear: loadMoreIfNeeded,
+                    isLoadingMore: isLoadingMore
+                )
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else if isLoadingInitial {
+                IOSJellyfinShelfSkeleton(title: title)
             }
         }
         .task(id: request) { await loadInitial() }
+        .onChange(of: seedItems.map(\.ref)) { _, _ in
+            // Home can refresh a personalized seed while the continuation
+            // query remains identical. Merge it without resetting scroll or
+            // discarding pages the user has already loaded.
+            items = Self.unique(seedItems + items)
+        }
     }
 
     private func loadInitial() async {
         guard items.isEmpty else { return }
+        items = Self.unique(seedItems)
+        isLoadingInitial = items.isEmpty
+        defer { isLoadingInitial = false }
         guard let page = try? await jellyfin.catalog(request, pageSize: 30),
               !Task.isCancelled else { return }
-        items = page.items
+        items = Self.unique(items + page.items)
         hasMore = page.hasMore
     }
 
@@ -784,9 +892,14 @@ struct IOSJellyfinPagedCatalogShelf: View {
             defer { isLoadingMore = false }
             guard let page = try? await jellyfin.catalog(request, loadMore: true, pageSize: 30),
                   !Task.isCancelled else { return }
-            items = page.items
+            items = Self.unique(items + page.items)
             hasMore = page.hasMore
         }
+    }
+
+    private static func unique(_ values: [MediaItem]) -> [MediaItem] {
+        var seen = Set<MediaItemRef>()
+        return values.filter { seen.insert($0.ref).inserted }
     }
 }
 
@@ -815,8 +928,10 @@ struct IOSJellyfinContinueWatchingShelf: View {
                     }
                 }
                 .padding(.horizontal)
+                .scrollTargetLayout()
             }
             .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.viewAligned(limitBehavior: .alwaysByOne))
         }
     }
 }
@@ -962,6 +1077,14 @@ private struct IOSJellyfinSkeletonHome: View {
 }
 
 private extension MediaLibrary {
+    var catalogKind: JellyfinCatalogKind? {
+        switch kind {
+        case .movies: .movies
+        case .shows: .shows
+        default: nil
+        }
+    }
+
     var icon: String {
         switch kind {
         case .movies: return "film.stack"

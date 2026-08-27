@@ -85,6 +85,58 @@ struct JellyfinCatalogQuery: Codable, Hashable, Sendable {
     }
 }
 
+/// Maps finite Home seeds to the matching paged Jellyfin query. Personalized
+/// mixed-media shelves intentionally return `nil`: extending those with a
+/// generic catalog would make their recommendation label inaccurate.
+enum JellyfinHomeCarouselContinuation {
+    static func request(for shelfTitle: String) -> JellyfinCatalogQuery? {
+        switch shelfTitle {
+        case "Director’s Picks", "Trending Movies":
+            return JellyfinCatalogQuery(kind: .movies, sort: .ratingDesc)
+        case "Trending TV Shows", "Critically Acclaimed TV":
+            return JellyfinCatalogQuery(kind: .shows, sort: .ratingDesc)
+        case "New Movies":
+            return JellyfinCatalogQuery(kind: .movies, sort: .addedAtDesc)
+        case "New TV Shows":
+            return JellyfinCatalogQuery(kind: .shows, sort: .addedAtDesc)
+        case "Movie Watchlist":
+            return JellyfinCatalogQuery(kind: .movies, filter: .watchlist, sort: .addedAtDesc)
+        case "TV Watchlist":
+            return JellyfinCatalogQuery(kind: .shows, filter: .watchlist, sort: .addedAtDesc)
+        case "Favorite Movies":
+            return JellyfinCatalogQuery(kind: .movies, filter: .favorites, sort: .addedAtDesc)
+        case "Favorite TV Shows":
+            return JellyfinCatalogQuery(kind: .shows, filter: .favorites, sort: .addedAtDesc)
+        case "Apple TV · Movies":
+            return JellyfinCatalogQuery(
+                kind: .movies,
+                studios: ["Apple Original Films", "Apple Studios", "Apple TV+"],
+                sort: .releaseDateDesc
+            )
+        case "Apple TV · TV Shows":
+            return JellyfinCatalogQuery(
+                kind: .shows,
+                studios: ["Apple TV+", "Apple Studios"],
+                sort: .releaseDateDesc
+            )
+        case "Disney · Movies":
+            return JellyfinCatalogQuery(
+                kind: .movies,
+                studios: ["Walt Disney Pictures", "Disney", "Pixar"],
+                sort: .releaseDateDesc
+            )
+        case "Disney · TV Shows":
+            return JellyfinCatalogQuery(
+                kind: .shows,
+                studios: ["Disney+", "Disney Television Animation", "Disney"],
+                sort: .releaseDateDesc
+            )
+        default:
+            return nil
+        }
+    }
+}
+
 struct JellyfinCatalogGenre: Identifiable, Codable, Hashable, Sendable {
     let id: String
     let name: String
