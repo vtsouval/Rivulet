@@ -45,7 +45,7 @@
 	<key>NSFaceIDUsageDescription</key>
 	<string>Use Face ID to unlock your Jellyfin profile and approve passkey sign-in.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Scan a Jellyfin Quick Connect QR code to securely authorize another device.</string>
+	<string>Scan a Jellyfin or Bonfire QR code to securely sign in or authorize another device.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Rivulet connects to playlist and guide servers on your local network.</string>
 	<key>UIBackgroundModes</key>

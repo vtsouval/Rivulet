@@ -199,6 +199,68 @@ final class JellyfinAuthTransportTests: XCTestCase {
         XCTAssertTrue(isEnabled)
     }
 
+    func testBonfireDevicePairingClaimReturnsValidatedKeychainReadySession() async throws {
+        let secret = String(repeating: "a", count: 43)
+        let payload = try JellyfinDevicePairingPayload(
+            url: URL(string: "https://media.example.com/jellyfin/web/#/quickconnect/claim?secret=\(secret)")!
+        )
+        JellyfinTestURLProtocol.enqueueJSON(
+            path: "/jellyfin/plugins/profiles/device-pairing/claim",
+            json: [
+                "AccessToken": "paired-token",
+                "User": ["Id": "user-1", "Name": "Vasilis"]
+            ]
+        )
+        JellyfinTestURLProtocol.enqueueJSON(
+            path: "/jellyfin/Users/Me",
+            json: [
+                "Id": "user-1",
+                "Name": "Vasilis",
+                "ServerId": "server-1",
+                "HasPassword": true
+            ]
+        )
+
+        let client = try makeClient(serverURL: "https://media.example.com/jellyfin")
+        let session = try await client.authenticateWithDevicePairing(payload: payload)
+
+        XCTAssertEqual(session.accessToken, "paired-token")
+        XCTAssertEqual(session.user.name, "Vasilis")
+        XCTAssertEqual(session.serverID, "server-1")
+
+        let requests = JellyfinTestURLProtocol.requests()
+        XCTAssertEqual(requests.map(\.httpMethod), ["POST", "GET"])
+        XCTAssertEqual(requests[0].url?.path, "/jellyfin/plugins/profiles/device-pairing/claim")
+        XCTAssertNil(requests[0].url?.query)
+        XCTAssertNil(requests[0].url?.fragment)
+        XCTAssertFalse(requests[0].value(forHTTPHeaderField: "Authorization")?.contains("Token=") == true)
+        XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Cache-Control"), "no-store")
+        XCTAssertTrue(requests[1].value(forHTTPHeaderField: "Authorization")?.contains("Token=\"paired-token\"") == true)
+
+        let body = try XCTUnwrap(requests[0].httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(json, ["Secret": secret])
+    }
+
+    func testBonfireDevicePairingNeverSendsSecretToAnotherOrigin() async throws {
+        let payload = try JellyfinDevicePairingPayload(
+            serverURL: URL(string: "https://media.example.com")!,
+            secret: String(repeating: "b", count: 43)
+        )
+        let client = try makeClient(serverURL: "https://other.example.com")
+
+        do {
+            _ = try await client.authenticateWithDevicePairing(payload: payload)
+            XCTFail("Expected a cross-origin pairing to be rejected")
+        } catch let error as JellyfinAPIError {
+            XCTAssertEqual(
+                error,
+                .forbidden(message: "This pairing link belongs to another Jellyfin server.")
+            )
+        }
+        XCTAssertTrue(JellyfinTestURLProtocol.requests().isEmpty)
+    }
+
     func testQuickConnectPayloadRoundTripsWithoutSecretsOrTokens() throws {
         let payload = try JellyfinQuickConnectPayload(
             serverURL: URL(string: "https://media.example.com/jellyfin/web/#/home")!,
@@ -218,6 +280,34 @@ final class JellyfinAuthTransportTests: XCTestCase {
         )
         XCTAssertFalse(payload.url.absoluteString.localizedCaseInsensitiveContains("secret"))
         XCTAssertFalse(payload.url.absoluteString.localizedCaseInsensitiveContains("token"))
+    }
+
+    func testBonfireDevicePairingPayloadParsesFragmentAndCustomLink() throws {
+        let secret = "Abcdefghijklmnopqrstuvwxyz0123456789_-ABCDE"
+        XCTAssertEqual(secret.count, 43)
+        let payload = try JellyfinDevicePairingPayload(
+            url: URL(string: "https://flix.example/jellyfin/web/#/quickconnect/claim?secret=\(secret)")!
+        )
+
+        XCTAssertEqual(payload.serverURL.absoluteString, "https://flix.example/jellyfin")
+        XCTAssertEqual(payload.secret, secret)
+        XCTAssertEqual(try JellyfinDevicePairingPayload(url: payload.appURL), payload)
+    }
+
+    func testBonfireDevicePairingPayloadRejectsLeakyOrMalformedLinks() {
+        let secret = String(repeating: "c", count: 43)
+        XCTAssertThrowsError(try JellyfinDevicePairingPayload(
+            url: URL(string: "https://flix.example/web/?secret=\(secret)#/quickconnect/claim")!
+        ))
+        XCTAssertThrowsError(try JellyfinDevicePairingPayload(
+            url: URL(string: "https://flix.example/web/#/quickconnect?secret=\(secret)")!
+        ))
+        XCTAssertThrowsError(try JellyfinDevicePairingPayload(
+            url: URL(string: "https://flix.example/web/#/quickconnect/claim?secret=too-short")!
+        ))
+        XCTAssertThrowsError(try JellyfinDevicePairingPayload(
+            url: URL(string: "https://flix.example/web/#/quickconnect/claim?secret=\(String(repeating: "!", count: 43))")!
+        ))
     }
 
     func testQuickConnectPayloadParsesBonfireApprovalURLWithServerSubpath() throws {

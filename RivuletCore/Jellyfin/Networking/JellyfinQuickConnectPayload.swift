@@ -118,3 +118,99 @@ nonisolated struct JellyfinQuickConnectPayload: Codable, Hashable, Sendable {
         return components?.url?.absoluteString.lowercased() ?? url.absoluteString.lowercased()
     }
 }
+
+/// Bonfire Accounts 2.2 single-use login handoff.
+///
+/// Unlike Jellyfin Quick Connect, this payload is consumed by the new device
+/// itself. The HTTPS QR stores the bearer secret in the URL fragment so it is
+/// never sent in an HTTP request, reverse-proxy log, or referrer. Rivulet only
+/// retains it long enough to perform the atomic claim; the resulting revocable
+/// Jellyfin access token is then persisted through `JellyfinSessionStore`.
+nonisolated struct JellyfinDevicePairingPayload: Hashable, Sendable {
+    static let appPath = "/device-pairing"
+    static let browserPath = "/quickconnect/claim"
+
+    let serverURL: URL
+    let secret: String
+
+    init(serverURL: URL, secret: String) throws {
+        self.serverURL = try JellyfinServerURL.normalize(serverURL)
+        self.secret = try Self.normalizedSecret(secret)
+    }
+
+    init(url: URL) throws {
+        if url.scheme?.lowercased() == JellyfinQuickConnectPayload.scheme {
+            guard url.host?.lowercased() == JellyfinQuickConnectPayload.host,
+                  url.path.lowercased() == Self.appPath,
+                  let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                  let server = components.queryItems?.first(where: { $0.name == "server" })?.value,
+                  let secret = components.queryItems?.first(where: { $0.name == "secret" })?.value else {
+                throw JellyfinAPIError.invalidResponse
+            }
+            try self.init(serverURL: JellyfinServerURL.normalize(server), secret: secret)
+            return
+        }
+
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.queryItems?.first(where: { $0.name.lowercased() == "secret" }) == nil,
+              let fragment = components.fragment,
+              let route = URLComponents(
+                string: "https://pairing.invalid\(fragment.hasPrefix("/") ? fragment : "/\(fragment)")"
+              ),
+              route.path.lowercased() == Self.browserPath,
+              let secret = route.queryItems?.first(where: { $0.name.lowercased() == "secret" })?.value else {
+            throw JellyfinAPIError.invalidResponse
+        }
+
+        // Reconstruct only the Jellyfin server base. The fragment credential
+        // is deliberately discarded before normalization.
+        components.fragment = nil
+        components.query = nil
+        var path = components.path
+        while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
+        if path.lowercased().hasSuffix("/web") { path.removeLast(4) }
+        components.path = path
+        guard let server = components.url else { throw JellyfinAPIError.invalidServerURL }
+        try self.init(serverURL: server, secret: secret)
+    }
+
+    /// Rivulet-to-Rivulet handoff for platforms that can open custom links.
+    /// Bonfire's camera-compatible HTTPS fragment remains the canonical QR.
+    var appURL: URL {
+        var components = URLComponents()
+        components.scheme = JellyfinQuickConnectPayload.scheme
+        components.host = JellyfinQuickConnectPayload.host
+        components.path = Self.appPath
+        components.queryItems = [
+            URLQueryItem(name: "server", value: serverURL.absoluteString),
+            URLQueryItem(name: "secret", value: secret)
+        ]
+        return components.url!
+    }
+
+    func belongs(to server: URL) -> Bool {
+        guard let normalized = try? JellyfinServerURL.normalize(server) else { return false }
+        return Self.originAndPath(normalized) == Self.originAndPath(serverURL)
+    }
+
+    private static func normalizedSecret(_ value: String) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count == 43,
+              trimmed.unicodeScalars.allSatisfy({ scalar in
+                  scalar.isASCII && (
+                    CharacterSet.alphanumerics.contains(scalar) || scalar == "-" || scalar == "_"
+                  )
+              }) else {
+            throw JellyfinAPIError.invalidResponse
+        }
+        return trimmed
+    }
+
+    private static func originAndPath(_ url: URL) -> String {
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.query = nil
+        components?.fragment = nil
+        return components?.url?.absoluteString.lowercased() ?? url.absoluteString.lowercased()
+    }
+}

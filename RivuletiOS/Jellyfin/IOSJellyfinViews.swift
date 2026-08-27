@@ -2,6 +2,9 @@
 // Copyright (C) 2025-2026 Bain Gurley
 
 import SwiftUI
+#if !targetEnvironment(macCatalyst)
+import VisionKit
+#endif
 
 struct IOSJellyfinContainerView: View {
     @EnvironmentObject private var jellyfin: IOSJellyfinSession
@@ -43,6 +46,8 @@ struct IOSJellyfinSignInView: View {
     @State private var password = ""
     @State private var operation: Task<Void, Never>?
     @State private var error: String?
+    @State private var showsPairingScanner = false
+    @State private var pendingPairing: JellyfinDevicePairingPayload?
 
     var body: some View {
         ZStack {
@@ -108,6 +113,18 @@ struct IOSJellyfinSignInView: View {
                             .controlSize(.large)
                             .disabled(isBusy || server.isEmpty)
 
+                        #if !targetEnvironment(macCatalyst)
+                        if DataScannerViewController.isSupported,
+                           DataScannerViewController.isAvailable {
+                            Button("Scan Bonfire Pairing QR", systemImage: "qrcode.viewfinder") {
+                                showsPairingScanner = true
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+                            .disabled(isBusy)
+                        }
+                        #endif
+
                         if IOSJellyfinPasskeyCoordinator.isAvailableInThisBuild {
                             Button("Sign in with Passkey", systemImage: "person.badge.key.fill", action: passkey)
                                 .buttonStyle(.bordered)
@@ -135,6 +152,27 @@ struct IOSJellyfinSignInView: View {
         }
         .preferredColorScheme(.dark)
         .onDisappear { operation?.cancel() }
+        #if !targetEnvironment(macCatalyst)
+        .fullScreenCover(isPresented: $showsPairingScanner) {
+            IOSJellyfinQRCodeScannerView { value in
+                showsPairingScanner = false
+                preparePairing(value)
+            }
+        }
+        #endif
+        .confirmationDialog(
+            "Sign in with this pairing?",
+            isPresented: Binding(
+                get: { pendingPairing != nil },
+                set: { if !$0 { pendingPairing = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Sign In") { claimPairing() }
+            Button("Cancel", role: .cancel) { pendingPairing = nil }
+        } message: {
+            Text(pairingConfirmationMessage)
+        }
     }
 
     private var isBusy: Bool {
@@ -174,6 +212,39 @@ struct IOSJellyfinSignInView: View {
         operation = Task {
             defer { operation = nil }
             do { try await jellyfin.passkeySignIn(server: server) }
+            catch is CancellationError { }
+            catch { self.error = IOSJellyfinSession.message(for: error) }
+        }
+    }
+
+    private var pairingConfirmationMessage: String {
+        guard let pendingPairing else { return "" }
+        let host = pendingPairing.serverURL.host ?? pendingPairing.serverURL.absoluteString
+        return "Use the single-use Bonfire pairing to sign in to \(host)."
+    }
+
+    private func preparePairing(_ scannedValue: String) {
+        do {
+            let trimmed = scannedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let url = URL(string: trimmed), url.scheme != nil else {
+                throw JellyfinAPIError.invalidResponse
+            }
+            pendingPairing = try JellyfinDevicePairingPayload(url: url)
+            error = nil
+        } catch {
+            pendingPairing = nil
+            self.error = "This Bonfire pairing QR is invalid or expired."
+        }
+    }
+
+    private func claimPairing() {
+        guard operation == nil, let payload = pendingPairing else { return }
+        pendingPairing = nil
+        password = ""
+        error = nil
+        operation = Task {
+            defer { operation = nil }
+            do { try await jellyfin.claimDevicePairing(payload) }
             catch is CancellationError { }
             catch { self.error = IOSJellyfinSession.message(for: error) }
         }

@@ -147,3 +147,11 @@ nonisolated struct JellyfinQuickConnectAuthenticationRequest: Encodable, Sendabl
         case secret = "Secret"
     }
 }
+
+nonisolated struct JellyfinDevicePairingClaimRequest: Encodable, Sendable {
+    let secret: String
+
+    enum CodingKeys: String, CodingKey {
+        case secret = "Secret"
+    }
+}

@@ -184,7 +184,7 @@ struct IOSJellyfinQuickConnectAuthorizerView: View {
 }
 
 #if !targetEnvironment(macCatalyst)
-private struct IOSJellyfinQRCodeScannerView: UIViewControllerRepresentable {
+struct IOSJellyfinQRCodeScannerView: UIViewControllerRepresentable {
     let recognized: (String) -> Void
 
     final class Coordinator: NSObject, DataScannerViewControllerDelegate {

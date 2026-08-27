@@ -21,6 +21,7 @@ struct IOSRootView: View {
     @AppStorage("ios.activeMediaBackend") private var selectedBackend = ""
     @State private var quickConnectMessage: String?
     @State private var pendingQuickConnect: JellyfinQuickConnectPayload?
+    @State private var pendingDevicePairing: JellyfinDevicePairingPayload?
 
     var body: some View {
         Group {
@@ -38,6 +39,11 @@ struct IOSRootView: View {
                 : IOSMediaBackend.plex.rawValue
         }
         .onOpenURL { url in
+            if let pairing = try? JellyfinDevicePairingPayload(url: url) {
+                selectedBackend = IOSMediaBackend.jellyfin.rawValue
+                pendingDevicePairing = pairing
+                return
+            }
             guard url.scheme?.lowercased() == JellyfinQuickConnectPayload.scheme else { return }
             selectedBackend = IOSMediaBackend.jellyfin.rawValue
             do {
@@ -70,6 +76,30 @@ struct IOSRootView: View {
         } message: {
             Text(quickConnectPromptMessage)
         }
+        .confirmationDialog(
+            "Sign in with this pairing?",
+            isPresented: Binding(
+                get: { pendingDevicePairing != nil },
+                set: { if !$0 { pendingDevicePairing = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Sign In") {
+                guard let pairing = pendingDevicePairing else { return }
+                pendingDevicePairing = nil
+                Task {
+                    do {
+                        try await jellyfin.claimDevicePairing(pairing)
+                        quickConnectMessage = "Signed in as \(jellyfin.userName ?? "your Jellyfin profile")"
+                    } catch {
+                        quickConnectMessage = IOSJellyfinSession.message(for: error)
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingDevicePairing = nil }
+        } message: {
+            Text(devicePairingPromptMessage)
+        }
         .alert("Quick Connect", isPresented: Binding(
             get: { quickConnectMessage != nil },
             set: { if !$0 { quickConnectMessage = nil } }
@@ -89,6 +119,12 @@ struct IOSRootView: View {
         guard let payload = pendingQuickConnect else { return "" }
         let server = payload.serverURL.host ?? payload.serverURL.absoluteString
         return "Approve code \(payload.code) for \(server)."
+    }
+
+    private var devicePairingPromptMessage: String {
+        guard let pairing = pendingDevicePairing else { return "" }
+        let server = pairing.serverURL.host ?? pairing.serverURL.absoluteString
+        return "Consume the single-use Bonfire pairing and sign in to \(server)."
     }
 }
 

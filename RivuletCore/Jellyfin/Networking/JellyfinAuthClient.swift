@@ -63,6 +63,43 @@ nonisolated struct JellyfinAuthClient: Sendable {
         return try makeSession(from: result)
     }
 
+    /// Atomically consumes a Bonfire Accounts 2.2 device-pairing secret.
+    /// The claim request is anonymous and sends no existing credential. The
+    /// issued token is immediately revalidated through `/Users/Me` before it
+    /// can cross the Keychain persistence boundary.
+    func authenticateWithDevicePairing(
+        payload: JellyfinDevicePairingPayload
+    ) async throws -> JellyfinAuthenticatedSession {
+        guard payload.belongs(to: transport.baseURL) else {
+            throw JellyfinAPIError.forbidden(
+                message: "This pairing link belongs to another Jellyfin server."
+            )
+        }
+
+        let result: JellyfinAuthenticationResult = try await transport.request(
+            "/plugins/profiles/device-pairing/claim",
+            method: .post,
+            headers: [
+                "Cache-Control": "no-store",
+                "Pragma": "no-cache"
+            ],
+            body: JellyfinDevicePairingClaimRequest(secret: payload.secret)
+        )
+        let claimed = try makeSession(from: result)
+        let user = try await currentUser(accessToken: claimed.accessToken)
+        guard user.id == claimed.user.id else {
+            throw JellyfinAPIError.unauthorized(message: nil)
+        }
+        return JellyfinAuthenticatedSession(
+            serverURL: claimed.serverURL,
+            accessToken: claimed.accessToken,
+            user: user,
+            serverID: claimed.serverID ?? user.serverID,
+            clientIdentity: claimed.clientIdentity,
+            authenticatedAt: claimed.authenticatedAt
+        )
+    }
+
     /// Authorizes a pending Quick Connect request for the authenticated user.
     /// Jellyfin returns a bare boolean and requires the existing user's token.
     func authorizeQuickConnect(

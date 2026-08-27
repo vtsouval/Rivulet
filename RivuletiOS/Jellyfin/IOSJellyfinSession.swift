@@ -164,6 +164,35 @@ final class IOSJellyfinSession: ObservableObject {
         }
     }
 
+    /// Signs this installation in by consuming Bonfire's five-minute,
+    /// single-use pairing link. Only the resulting revocable Jellyfin token is
+    /// persisted, using the same Keychain-backed path as password, passkey and
+    /// standard Quick Connect authentication.
+    func claimDevicePairing(_ payload: JellyfinDevicePairingPayload) async throws {
+        state = .connecting
+        quickConnectCode = nil
+        quickConnectPayloadURL = nil
+        do {
+            let transport = try JellyfinTransport(
+                serverURL: payload.serverURL,
+                clientIdentity: JellyfinSessionStore.clientIdentity()
+            )
+            let auth = JellyfinAuthClient(transport: transport)
+            _ = try await auth.publicSystemInfo()
+            let session = try await auth.authenticateWithDevicePairing(payload: payload)
+            try await JellyfinSessionStore.shared.persist(session)
+            UserDefaults.standard.set(session.serverURL.absoluteString, forKey: "jellyfin.lastServerURL")
+            try attach(session)
+            refreshAfterAuthentication()
+        } catch is CancellationError {
+            state = .signedOut
+            throw CancellationError()
+        } catch {
+            state = .failed(Self.message(for: error))
+            throw error
+        }
+    }
+
     /// Lets an already signed-in iPhone authorize a television or another
     /// client. The QR server must exactly match the active authenticated
     /// server, preventing a scan from sending this token to another origin.
