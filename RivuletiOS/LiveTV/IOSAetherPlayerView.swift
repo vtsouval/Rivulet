@@ -55,8 +55,8 @@ struct IOSAetherPlayerView: View {
             .ignoresSafeArea()
 
             if controlsVisible {
-                osd
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                chrome
+                    .transition(.opacity)
             }
 
             if shouldShowActivity {
@@ -100,117 +100,65 @@ struct IOSAetherPlayerView: View {
         }
     }
 
-    private var osd: some View {
-        GeometryReader { geometry in
-            // Landscape widens the portrait rail without scaling its height,
-            // typography or 44-point touch controls.
-            let compact = true
-
-            ZStack {
-                VStack(spacing: 0) {
-                    topBar(compact: compact)
-                    Spacer()
-                    liveRail(compact: compact)
-                        .padding(.horizontal, compact ? 10 : 24)
-                        .padding(.bottom, compact ? 8 : 18)
-                        .background {
-                            GeometryReader { proxy in
-                                Color.clear.preference(
-                                    key: IOSPlayerRailTopPreferenceKey.self,
-                                    value: proxy.frame(in: .named(IOSPlayerChromeCoordinateSpace.name)).minY
-                                )
-                            }
-                        }
-                }
-
-            }
-            .background(
-                LinearGradient(
-                    colors: [.black.opacity(0.62), .clear, .black.opacity(0.72)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
-            )
-        }
-    }
-
-    private func topBar(compact: Bool) -> some View {
-        HStack(spacing: 12) {
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.headline)
-                    .frame(width: 44, height: 44)
-                    .background(.black.opacity(0.62), in: Circle())
-            }
-            .accessibilityLabel("Close player")
-            Spacer()
-        }
-        .padding(.horizontal, compact ? 10 : 24)
-        .padding(.top, 8)
-    }
-
-    private func liveRail(compact: Bool) -> some View {
+    private var chrome: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            IOSPlayerGlassRail(
+            IOSAdaptivePlayerChrome(
                 eyebrow: request.channel.name,
                 title: request.program?.title ?? "Live channel",
                 currentTime: liveProgramCurrentTime(at: context.date),
                 duration: liveProgramDuration,
                 isSeekable: false,
-                centerControl: AnyView(
-                    IOSPlayerControlButton(
-                        title: isPlaying ? "Pause" : "Play",
-                        systemImage: isPlaying ? "pause.fill" : "play.fill",
-                        prominent: true,
-                        compact: compact,
-                        disabled: shouldShowActivity || isFailed
-                    ) {
-                        togglePlayback()
-                    }
-                ),
-                progressLeadingLabel: request.program.map { programStartLabel($0) },
-                progressTrailingLabel: request.program.map { programEndLabel($0) },
-                compact: compact,
+                leadingAction: relativeChannel(-1).map { channel in
+                    IOSPlayerTransportAction(
+                        title: "Previous channel, \(channel.name)",
+                        systemImage: "backward.end.fill",
+                        disabled: shouldShowActivity
+                    ) { switchChannel(to: channel) }
+                },
+                primaryAction: IOSPlayerTransportAction(
+                    title: isPlaying ? "Pause" : "Play",
+                    systemImage: isPlaying ? "pause.fill" : "play.fill",
+                    prominent: true,
+                    disabled: shouldShowActivity || isFailed
+                ) { togglePlayback() },
+                trailingAction: relativeChannel(1).map { channel in
+                    IOSPlayerTransportAction(
+                        title: "Next channel, \(channel.name)",
+                        systemImage: "forward.end.fill",
+                        disabled: shouldShowActivity
+                    ) { switchChannel(to: channel) }
+                },
+                onClose: { dismiss() },
                 onSeek: { _ in }
             ) {
-                HStack(spacing: 4) {
-                    IOSPlayerControlButton(
-                        title: "Channels",
-                        systemImage: "tv.inset.filled",
-                        compact: compact,
-                        dense: true
-                    ) {
-                        showPanel(.channels)
-                    }
-                    IOSPlayerControlButton(
-                        title: "Subtitles",
-                        systemImage: subtitleIcon,
-                        compact: compact,
-                        dense: true
-                    ) {
-                        showPanel(.subtitles)
-                    }
-                    IOSPlayerControlButton(
-                        title: "Audio",
-                        systemImage: "waveform",
-                        compact: compact,
-                        dense: true
-                    ) {
-                        showPanel(.audio)
-                    }
-                    IOSPlayerControlButton(
-                        title: "Info",
-                        systemImage: "info.circle",
-                        compact: compact,
-                        dense: true
-                    ) {
-                        showPanel(.info)
-                    }
-                }
+                IOSPlayerControlButton(
+                    title: "Channels",
+                    systemImage: "tv.inset.filled",
+                    compact: true,
+                    dense: true,
+                    grouped: true
+                ) { showPanel(.channels) }
+                IOSPlayerControlButton(
+                    title: "Subtitles",
+                    systemImage: subtitleIcon,
+                    compact: true,
+                    dense: true,
+                    grouped: true
+                ) { showPanel(.subtitles) }
+                IOSPlayerControlButton(
+                    title: "Audio",
+                    systemImage: "waveform",
+                    compact: true,
+                    dense: true,
+                    grouped: true
+                ) { showPanel(.audio) }
+                IOSPlayerControlButton(
+                    title: "Info",
+                    systemImage: "info.circle",
+                    compact: true,
+                    dense: true,
+                    grouped: true
+                ) { showPanel(.info) }
             }
         }
     }
@@ -459,6 +407,15 @@ struct IOSAetherPlayerView: View {
         programsByChannel[channel.id]?.first { $0.isAiring(at: Date()) }
     }
 
+    private func relativeChannel(_ offset: Int) -> IOSIPTVChannel? {
+        guard let index = channels.firstIndex(where: { $0.id == request.channel.id }) else {
+            return nil
+        }
+        let target = index + offset
+        guard channels.indices.contains(target) else { return nil }
+        return channels[target]
+    }
+
     private func showPanel(_ panel: Panel) {
         autoHideTask?.cancel()
         activePanel = panel
@@ -522,9 +479,7 @@ struct IOSAetherPlayerView: View {
 
     private func loadChannel() async {
         do {
-            let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.playback, mode: .moviePlayback)
-            try audioSession.setActive(true)
+            try IOSMediaAudioSession.activateForVideo()
             var headers = request.channel.playbackHeaders.dictionary
             // A client-generated ID stays stable across Aether/AVPlayer's
             // internal retries for this load, and changes when the user tunes

@@ -45,7 +45,7 @@ struct IOSPlexPlayerView: View {
             )
             .ignoresSafeArea()
 
-            if controlsVisible { osd.transition(.opacity) }
+            if controlsVisible { chrome.transition(.opacity) }
             if let marker = activeMarker {
                 markerButton(marker).transition(.move(edge: .trailing).combined(with: .opacity))
             }
@@ -81,102 +81,54 @@ struct IOSPlexPlayerView: View {
         }
     }
 
-    private var osd: some View {
-        GeometryReader { geometry in
-            // Keep the portrait rail's typography, touch targets and height in
-            // landscape; the landscape adaptation is width only.
-            let compact = true
-
-            ZStack {
-                VStack {
-                    HStack {
-                        Button { dismiss() } label: {
-                            Image(systemName: "xmark")
-                                .font(.headline)
-                                .frame(width: 44, height: 44)
-                                .background(.black.opacity(0.62), in: Circle())
-                        }
-                        .accessibilityLabel("Close player")
-                        Spacer()
-                    }
-                    .padding(.horizontal, compact ? 10 : 24)
-                    .padding(.top, 8)
-
-                    Spacer()
-                    controlRail(compact: compact)
-                        .padding(.horizontal, compact ? 10 : 24)
-                        .padding(.bottom, compact ? 8 : 18)
-                        .background {
-                            GeometryReader { proxy in
-                                Color.clear.preference(
-                                    key: IOSPlayerRailTopPreferenceKey.self,
-                                    value: proxy.frame(in: .named(IOSPlayerChromeCoordinateSpace.name)).minY
-                                )
-                            }
-                        }
-                }
-
-            }
-            .background(
-                LinearGradient(
-                    colors: [.black.opacity(0.65), .clear, .black.opacity(0.82)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
-            )
-        }
-    }
-
-    private func controlRail(compact: Bool) -> some View {
-        IOSPlayerGlassRail(
+    private var chrome: some View {
+        IOSAdaptivePlayerChrome(
             eyebrow: request.item.subtitle,
             title: request.item.displayTitle,
             currentTime: player.sourceTime,
             duration: max(request.item.durationSeconds, player.duration),
             isSeekable: true,
-            centerControl: AnyView(
-                IOSPlayerControlButton(
-                    title: isPlaying ? "Pause" : "Play",
-                    systemImage: isPlaying ? "pause.fill" : "play.fill",
-                    prominent: true,
-                    compact: compact,
-                    disabled: shouldShowActivity
-                ) {
-                    isPlaying ? player.pause() : player.play()
-                    restartAutoHide()
-                }
-            ),
-            compact: compact,
+            leadingAction: IOSPlayerTransportAction(
+                title: "Back \(skipBackwardSeconds) seconds",
+                systemImage: IOSPlayerSkipSymbol.backward(skipBackwardSeconds)
+            ) { seekBy(-TimeInterval(skipBackwardSeconds)) },
+            primaryAction: IOSPlayerTransportAction(
+                title: isPlaying ? "Pause" : "Play",
+                systemImage: isPlaying ? "pause.fill" : "play.fill",
+                prominent: true,
+                disabled: shouldShowActivity
+            ) {
+                isPlaying ? player.pause() : player.play()
+                restartAutoHide()
+            },
+            trailingAction: IOSPlayerTransportAction(
+                title: "Forward \(skipForwardSeconds) seconds",
+                systemImage: IOSPlayerSkipSymbol.forward(skipForwardSeconds)
+            ) { seekBy(TimeInterval(skipForwardSeconds)) },
+            onClose: { dismiss() },
             onSeek: { value in Task { await player.seek(to: value) } }
         ) {
-            HStack(spacing: 4) {
-                IOSPlayerControlButton(
-                    title: "Subtitles",
-                    systemImage: subtitleIcon,
-                    compact: compact,
-                    dense: true
-                ) {
-                    show(.subtitles)
-                }
-                IOSPlayerControlButton(
-                    title: "Audio",
-                    systemImage: "waveform",
-                    compact: compact,
-                    dense: true
-                ) {
-                    show(.audio)
-                }
-                IOSPlayerControlButton(
-                    title: "Info",
-                    systemImage: "info.circle",
-                    compact: compact,
-                    dense: true
-                ) {
-                    show(.info)
-                }
-            }
+            IOSPlayerControlButton(
+                title: "Subtitles",
+                systemImage: subtitleIcon,
+                compact: true,
+                dense: true,
+                grouped: true
+            ) { show(.subtitles) }
+            IOSPlayerControlButton(
+                title: "Audio",
+                systemImage: "waveform",
+                compact: true,
+                dense: true,
+                grouped: true
+            ) { show(.audio) }
+            IOSPlayerControlButton(
+                title: "Info",
+                systemImage: "info.circle",
+                compact: true,
+                dense: true,
+                grouped: true
+            ) { show(.info) }
         }
     }
 
@@ -293,9 +245,7 @@ struct IOSPlexPlayerView: View {
 
     private func load() async {
         do {
-            let audio = AVAudioSession.sharedInstance()
-            try audio.setCategory(.playback, mode: .moviePlayback)
-            try audio.setActive(true)
+            try IOSMediaAudioSession.activateForVideo()
             try await player.load(url: request.url, headers: request.headers, startTime: request.item.resumeSeconds > 0 ? request.item.resumeSeconds : nil)
             await plex.reportProgress(for: request, time: player.sourceTime, state: "playing")
         } catch is CancellationError { return }

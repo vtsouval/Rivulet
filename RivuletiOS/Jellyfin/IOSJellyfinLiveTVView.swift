@@ -435,9 +435,11 @@ private struct IOSJellyfinLivePlayerView: View {
     @State private var activeStream: ResolvedLiveTVStream
     @State private var controlsVisible = true
     @State private var autoHideTask: Task<Void, Never>?
-    @State private var showsInfo = false
+    @State private var activePanel: Panel?
     @State private var showsGuide = false
     @State private var isSwitchingChannel = false
+    @State private var captionStyle = CaptionAppearance.current()
+    @State private var osdTop: CGFloat?
 
     init(context: IOSJellyfinLivePlaybackContext) {
         self.context = context
@@ -450,6 +452,14 @@ private struct IOSJellyfinLivePlayerView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             AetherPlayerSurface(player: player).ignoresSafeArea()
+            IOSAetherSubtitleOverlay(
+                cues: visibleSubtitleCues,
+                nativeCues: player.nativeSubtitleCues,
+                style: captionStyle,
+                landscapeOSDTop: controlsVisible ? osdTop : nil,
+                videoSize: player.videoSize
+            )
+            .ignoresSafeArea()
             IOSPlayerTapSurface(onSingleTap: toggleControls, onDoubleTapLeft: {}, onDoubleTapRight: {}).ignoresSafeArea()
             if controlsVisible { controls.transition(.opacity) }
             if shouldShowActivity {
@@ -465,36 +475,13 @@ private struct IOSJellyfinLivePlayerView: View {
                 .padding(20).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18)).padding()
             }
         }
-        .foregroundStyle(.white).statusBarHidden()
-        .sheet(isPresented: $showsInfo) {
-            NavigationStack {
-                Form {
-                    Section("Now Playing") {
-                        LabeledContent("Channel", value: activeChannel.name)
-                        if let program = activeProgram {
-                            LabeledContent("Programme", value: program.title)
-                            LabeledContent("Time", value: program.timeRangeFormatted)
-                            if let description = program.description, !description.isEmpty {
-                                Text(description).font(.subheadline).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    Section("Volume") { IOSSystemVolumeSlider().frame(height: 38) }
-                    if player.currentAVPlayer != nil {
-                        Section("Play on another screen") {
-                            HStack {
-                                Label("AirPlay", systemImage: "airplayvideo")
-                                Spacer()
-                                IOSAirPlayRouteButton().frame(width: 44, height: 34)
-                            }
-                        }
-                    }
-                }
-                .navigationTitle("Live TV")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showsInfo = false } } }
-            }
-            .presentationDetents([.medium])
+        .coordinateSpace(name: IOSPlayerChromeCoordinateSpace.name)
+        .foregroundStyle(.white)
+        .statusBarHidden()
+        .sheet(item: $activePanel) { panel in
+            playerPanel(panel)
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showsGuide) {
             IOSJellyfinMiniGuideSheet(
@@ -511,6 +498,13 @@ private struct IOSJellyfinLivePlayerView: View {
         }
         .task { await load(activeStream) }
         .onAppear { restartAutoHide() }
+        .onChange(of: activePanel) { _, panel in
+            if panel == nil { restartAutoHide() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: CaptionAppearance.changedNotification)) { _ in
+            captionStyle = CaptionAppearance.current()
+        }
+        .onPreferenceChange(IOSPlayerRailTopPreferenceKey.self) { osdTop = $0 }
         .onDisappear {
             autoHideTask?.cancel(); player.stop()
             let stream = activeStream
@@ -520,59 +514,145 @@ private struct IOSJellyfinLivePlayerView: View {
     }
 
     private var controls: some View {
-        VStack {
-            HStack {
-                Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
-                    .buttonStyle(.plain).background(.ultraThinMaterial, in: Circle())
-                Spacer()
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            IOSAdaptivePlayerChrome(
+                eyebrow: activeChannel.name,
+                title: activeProgram?.title ?? "Live channel",
+                currentTime: liveProgramCurrentTime(at: context.date),
+                duration: liveProgramDuration,
+                isSeekable: false,
+                leadingAction: relativeSnapshot(-1).map { snapshot in
+                    IOSPlayerTransportAction(
+                        title: "Previous channel, \(snapshot.channel.name)",
+                        systemImage: "backward.end.fill",
+                        disabled: isSwitchingChannel
+                    ) { Task { await switchChannel(to: snapshot) } }
+                },
+                primaryAction: IOSPlayerTransportAction(
+                    title: isPlaying ? "Pause" : "Play",
+                    systemImage: isPlaying ? "pause.fill" : "play.fill",
+                    prominent: true,
+                    disabled: shouldShowActivity
+                ) {
+                    isPlaying ? player.pause() : player.play()
+                    restartAutoHide()
+                },
+                trailingAction: relativeSnapshot(1).map { snapshot in
+                    IOSPlayerTransportAction(
+                        title: "Next channel, \(snapshot.channel.name)",
+                        systemImage: "forward.end.fill",
+                        disabled: isSwitchingChannel
+                    ) { Task { await switchChannel(to: snapshot) } }
+                },
+                onClose: { dismiss() },
+                onSeek: { _ in }
+            ) {
+                IOSPlayerControlButton(
+                    title: "Mini Guide",
+                    systemImage: "list.bullet.rectangle",
+                    compact: true,
+                    dense: true,
+                    grouped: true
+                ) {
+                    showsGuide = true
+                    autoHideTask?.cancel()
+                }
+                IOSPlayerControlButton(
+                    title: "Subtitles",
+                    systemImage: subtitleIcon,
+                    compact: true,
+                    dense: true,
+                    grouped: true
+                ) { show(.subtitles) }
+                IOSPlayerControlButton(
+                    title: "Audio",
+                    systemImage: "waveform",
+                    compact: true,
+                    dense: true,
+                    grouped: true
+                ) { show(.audio) }
+                IOSPlayerControlButton(
+                    title: "Info",
+                    systemImage: "info.circle",
+                    compact: true,
+                    dense: true,
+                    grouped: true
+                ) { show(.info) }
             }
-            .padding()
-            Spacer()
-            VStack(spacing: 12) {
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(activeChannel.name).font(.headline)
-                        if let program = activeProgram {
-                            Text(program.title).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+        }
+    }
+
+    @ViewBuilder
+    private func playerPanel(_ panel: Panel) -> some View {
+        NavigationStack {
+            List {
+                switch panel {
+                case .subtitles:
+                    Button {
+                        player.selectSubtitleTrack(id: nil)
+                        activePanel = nil
+                    } label: {
+                        trackRow("Off", detail: nil, selected: player.currentSubtitleTrackId == nil)
+                    }
+                    if player.subtitleTracks.isEmpty {
+                        ContentUnavailableView("No subtitles", systemImage: "captions.bubble")
+                    } else {
+                        ForEach(player.subtitleTracks) { track in
+                            Button {
+                                player.selectSubtitleTrack(id: track.id)
+                                activePanel = nil
+                            } label: {
+                                trackRow(track.name, detail: track.detail, selected: player.currentSubtitleTrackId == track.id)
+                            }
                         }
                     }
-                    Spacer()
-                    Button { isPlaying ? player.pause() : player.play(); restartAutoHide() } label: {
-                        Image(systemName: isPlaying ? "pause.fill" : "play.fill").frame(width: 48, height: 48)
+                case .audio:
+                    if player.audioTracks.isEmpty {
+                        ContentUnavailableView("Default audio", systemImage: "waveform")
+                    } else {
+                        ForEach(player.audioTracks) { track in
+                            Button {
+                                player.selectAudioTrack(id: track.id)
+                                activePanel = nil
+                            } label: {
+                                trackRow(track.name, detail: track.detail, selected: player.currentAudioTrackId == track.id)
+                            }
+                        }
                     }
-                    .buttonStyle(.plain).background(.ultraThinMaterial, in: Circle())
-                }
-
-                HStack(spacing: 14) {
-                    Button { Task { await switchRelative(-1) } } label: {
-                        Image(systemName: "backward.end.fill").frame(width: 42, height: 42)
-                    }
-                    .buttonStyle(.plain).background(.ultraThinMaterial, in: Circle())
-                    .disabled(isSwitchingChannel || relativeSnapshot(-1) == nil)
-                    Button { showsGuide = true; autoHideTask?.cancel() } label: {
-                        Image(systemName: "list.bullet.rectangle").frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(.plain).background(.ultraThinMaterial, in: Circle())
-                    Button { Task { await switchRelative(1) } } label: {
-                        Image(systemName: "forward.end.fill").frame(width: 42, height: 42)
-                    }
-                    .buttonStyle(.plain).background(.ultraThinMaterial, in: Circle())
-                    .disabled(isSwitchingChannel || relativeSnapshot(1) == nil)
-                    Button { showsInfo = true; autoHideTask?.cancel() } label: {
-                        Image(systemName: "info.circle").frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(.plain).background(.ultraThinMaterial, in: Circle())
-                    if player.currentAVPlayer != nil {
-                        IOSAirPlayRouteButton().frame(width: 40, height: 40)
+                case .info:
+                    Section("Now Playing") {
+                        LabeledContent("Channel", value: activeChannel.name)
+                        if let program = activeProgram {
+                            LabeledContent("Programme", value: program.title)
+                            LabeledContent("Time", value: program.timeRangeFormatted)
+                            if let description = program.description, !description.isEmpty {
+                                Text(description).font(.subheadline).foregroundStyle(.secondary)
+                            }
+                        }
                     }
                 }
             }
-            .padding(16)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .padding()
+            .navigationTitle(panel.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { activePanel = nil }
+                }
+            }
         }
-        .background(LinearGradient(colors: [.black.opacity(0.58), .clear, .black.opacity(0.76)], startPoint: .top, endPoint: .bottom).ignoresSafeArea().allowsHitTesting(false))
+    }
+
+    private func trackRow(_ title: String, detail: String?, selected: Bool) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).foregroundStyle(.primary)
+                if let detail, !detail.isEmpty {
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if selected { Image(systemName: "checkmark").foregroundStyle(.tint) }
+        }
     }
 
     private var shouldShowActivity: Bool {
@@ -583,11 +663,29 @@ private struct IOSJellyfinLivePlayerView: View {
     }
     private var isPlaying: Bool { if case .playing = player.state { return true }; return false }
 
+    private var subtitleIcon: String {
+        player.currentSubtitleTrackId == nil ? "captions.bubble" : "captions.bubble.fill"
+    }
+
+    private var visibleSubtitleCues: [AetherPlayer.SubtitleCue] {
+        player.subtitleCues.filter {
+            $0.startTime <= player.sourceTime && $0.endTime >= player.sourceTime
+        }
+    }
+
+    private var liveProgramDuration: TimeInterval {
+        guard let program = activeProgram else { return 0 }
+        return max(0, program.endTime.timeIntervalSince(program.startTime))
+    }
+
+    private func liveProgramCurrentTime(at date: Date) -> TimeInterval {
+        guard let program = activeProgram else { return 0 }
+        return min(max(date.timeIntervalSince(program.startTime), 0), liveProgramDuration)
+    }
+
     private func load(_ stream: ResolvedLiveTVStream) async {
         do {
-            let audio = AVAudioSession.sharedInstance()
-            try audio.setCategory(.playback, mode: .moviePlayback)
-            try audio.setActive(true)
+            try IOSMediaAudioSession.activateForVideo()
             try await player.loadLive(url: stream.url, headers: stream.headers)
         } catch is CancellationError { }
         catch { }
@@ -624,14 +722,24 @@ private struct IOSJellyfinLivePlayerView: View {
     }
 
     private func toggleControls() { withAnimation(.easeInOut(duration: 0.2)) { controlsVisible.toggle() }; restartAutoHide() }
+    private func show(_ panel: Panel) {
+        autoHideTask?.cancel()
+        activePanel = panel
+    }
     private func restartAutoHide() {
         autoHideTask?.cancel()
-        guard controlsVisible else { return }
+        guard controlsVisible, activePanel == nil, !showsGuide else { return }
         autoHideTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(5))
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, activePanel == nil, !showsGuide else { return }
             withAnimation(.easeInOut(duration: 0.25)) { controlsVisible = false }
         }
+    }
+
+    private enum Panel: String, Identifiable {
+        case subtitles, audio, info
+        var id: String { rawValue }
+        var title: String { rawValue.capitalized }
     }
 }
 

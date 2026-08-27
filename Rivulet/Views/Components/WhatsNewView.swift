@@ -140,6 +140,13 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.6.3 (85)", [
+            "A new adaptive iPhone and iPad player places transport, utilities, metadata and options in distinct uncluttered layers",
+            "Native AirPlay output and system volume controls stay directly available and follow hardware volume changes",
+            "Portrait, landscape and iPad layouts use safe-area-aware spacing with accessible 44-point minimum touch targets",
+            "Movies and episodes gain centered configurable skip controls while Live TV gains fast previous and next channel transport",
+            "Jellyfin Live TV now exposes subtitle and audio tracks with correctly positioned captions",
+        ]),
         ("1.6.2 (84)", [
             "Live TV now loads the complete Jellyfin lineup with safe pagination instead of stopping after the first page",
             "Greek channel recognition covers ERT, ANT1, MEGA, Star, Alpha, SKAI, OPEN, MAK, Kontra, Vouli, Cosmote and Nova without cross-country EPG overlap",

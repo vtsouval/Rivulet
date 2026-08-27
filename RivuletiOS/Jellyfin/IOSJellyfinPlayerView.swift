@@ -167,65 +167,74 @@ struct IOSJellyfinPlayerView: View {
     }
 
     private var chrome: some View {
-        VStack {
-            HStack {
-                Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
-                    .buttonStyle(.plain).background(.ultraThinMaterial, in: Circle())
-                Spacer()
-            }
-            .padding(.horizontal, 12).padding(.top, 8)
-            Spacer()
-            IOSPlayerGlassRail(
-                eyebrow: currentItem.episodeHierarchyTitle,
-                title: currentItem.title,
-                currentTime: player.sourceTime,
-                duration: max(currentStream.source.duration, player.duration),
-                isSeekable: true,
-                centerControl: AnyView(
-                    IOSPlayerControlButton(
-                        title: isPlaying ? "Pause" : "Play",
-                        systemImage: isPlaying ? "pause.fill" : "play.fill",
-                        prominent: true,
-                        compact: true,
-                        disabled: shouldShowActivity
-                    ) { togglePlayback() }
-                ),
+        IOSAdaptivePlayerChrome(
+            eyebrow: currentItem.episodeHierarchyTitle,
+            title: currentItem.title,
+            currentTime: player.sourceTime,
+            duration: max(currentStream.source.duration, player.duration),
+            isSeekable: true,
+            leadingAction: IOSPlayerTransportAction(
+                title: "Back \(skipBackwardSeconds) seconds",
+                systemImage: IOSPlayerSkipSymbol.backward(skipBackwardSeconds)
+            ) { seek(by: -TimeInterval(skipBackwardSeconds)) },
+            primaryAction: IOSPlayerTransportAction(
+                title: isPlaying ? "Pause" : "Play",
+                systemImage: isPlaying ? "pause.fill" : "play.fill",
+                prominent: true,
+                disabled: shouldShowActivity
+            ) { togglePlayback() },
+            trailingAction: IOSPlayerTransportAction(
+                title: "Forward \(skipForwardSeconds) seconds",
+                systemImage: IOSPlayerSkipSymbol.forward(skipForwardSeconds)
+            ) { seek(by: TimeInterval(skipForwardSeconds)) },
+            onClose: { dismiss() },
+            onSeek: { value in requestSeek(to: value) }
+        ) {
+            IOSPlayerControlButton(
+                title: "Subtitles",
+                systemImage: subtitleIcon,
                 compact: true,
-                onSeek: { value in requestSeek(to: value) }
-            ) {
-                HStack(spacing: 4) {
-                    IOSPlayerControlButton(title: "Subtitles", systemImage: subtitleIcon, compact: true, dense: true) { show(.subtitles) }
-                    IOSPlayerControlButton(title: "Audio", systemImage: "waveform", compact: true, dense: true) { show(.audio) }
-                    IOSPlayerControlButton(title: "Playback", systemImage: "slider.horizontal.3", compact: true, dense: true) { show(.playback) }
-                    if player.currentAVPlayer != nil {
-                        IOSAirPlayRouteButton()
-                            .frame(width: 36, height: 36)
-                            .padding(.horizontal, 2)
-                            .accessibilityLabel("AirPlay")
-                    }
-                    if !episodeQueue.isEmpty {
-                        IOSPlayerControlButton(title: "Up Next", systemImage: "list.and.film", compact: true, dense: true) { show(.upNext) }
-                    }
-                    IOSPlayerControlButton(
-                        title: "Watch Together",
-                        systemImage: watchTogether.isActive ? "person.2.wave.2.fill" : "person.2.wave.2",
-                        compact: true,
-                        dense: true
-                    ) { show(.watchTogether) }
-                    IOSPlayerControlButton(title: "Info", systemImage: "info.circle", compact: true, dense: true) { show(.info) }
-                }
+                dense: true,
+                grouped: true
+            ) { show(.subtitles) }
+            IOSPlayerControlButton(
+                title: "Audio",
+                systemImage: "waveform",
+                compact: true,
+                dense: true,
+                grouped: true
+            ) { show(.audio) }
+            IOSPlayerControlButton(
+                title: "Playback",
+                systemImage: "slider.horizontal.3",
+                compact: true,
+                dense: true,
+                grouped: true
+            ) { show(.playback) }
+            if !episodeQueue.isEmpty {
+                IOSPlayerControlButton(
+                    title: "Up Next",
+                    systemImage: "list.and.film",
+                    compact: true,
+                    dense: true,
+                    grouped: true
+                ) { show(.upNext) }
             }
-            .padding(.horizontal, 10).padding(.bottom, 8)
-            .background {
-                GeometryReader { proxy in
-                    Color.clear.preference(key: IOSPlayerRailTopPreferenceKey.self, value: proxy.frame(in: .named(IOSPlayerChromeCoordinateSpace.name)).minY)
-                }
-            }
+            IOSPlayerControlButton(
+                title: "Watch Together",
+                systemImage: watchTogether.isActive ? "person.2.wave.2.fill" : "person.2.wave.2",
+                compact: true,
+                dense: true,
+                grouped: true
+            ) { show(.watchTogether) }
+            IOSPlayerControlButton(
+                title: "Info",
+                systemImage: "info.circle",
+                compact: true,
+                dense: true,
+                grouped: true
+            ) { show(.info) }
         }
-        .background(
-            LinearGradient(colors: [.black.opacity(0.62), .clear, .black.opacity(0.84)], startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea().allowsHitTesting(false)
-        )
     }
 
     @ViewBuilder private func playerPanel(_ panel: Panel) -> some View {
@@ -267,18 +276,6 @@ struct IOSJellyfinPlayerView: View {
                             Text("1.25×").tag(Float(1.25))
                             Text("1.5×").tag(Float(1.5))
                             Text("2×").tag(Float(2))
-                        }
-                    }
-                    Section("Volume") {
-                        IOSSystemVolumeSlider().frame(height: 36)
-                    }
-                    if player.currentAVPlayer != nil {
-                        Section("Play on another screen") {
-                            HStack {
-                                Label("AirPlay", systemImage: "airplayvideo")
-                                Spacer()
-                                IOSAirPlayRouteButton().frame(width: 44, height: 34)
-                            }
                         }
                     }
                 case .upNext:
@@ -470,9 +467,7 @@ struct IOSJellyfinPlayerView: View {
     private func load() async {
         guard let url = currentStream.source.streamURL else { return }
         do {
-            let audio = AVAudioSession.sharedInstance()
-            try audio.setCategory(.playback, mode: .moviePlayback)
-            try audio.setActive(true)
+            try IOSMediaAudioSession.activateForVideo()
             let reporter = context.provider.progressReporter(for: currentItem.ref, streamInfo: currentStream)
             await reporter.start()
             try await player.load(
