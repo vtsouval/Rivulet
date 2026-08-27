@@ -425,7 +425,7 @@ final class IOSJellyfinSession: ObservableObject {
     func genres(for kind: JellyfinCatalogKind, force: Bool = false) async throws -> [JellyfinCatalogGenre] {
         if !force, let cached = genreCache[kind] { return cached }
         guard let provider else { throw MediaProviderError.unauthorized }
-        let values = try await provider.catalogGenres(kind: kind)
+        let values = JellyfinCatalogGenre.standardOnly(try await provider.catalogGenres(kind: kind))
         genreCache[kind] = values
         return values
     }
@@ -608,7 +608,10 @@ final class IOSJellyfinSession: ObservableObject {
     private func saveSnapshot() {
         guard let session = provider?.session else { return }
         var catalogs: [String: [MediaItem]] = [:]
-        for (request, page) in catalogCache where request.filter == .all && request.genre == nil {
+        // Keep visible genre and studio rails warm across launches. The snapshot
+        // remains metadata-only and bounded per rail, while authentication stays
+        // in Keychain.
+        for (request, page) in catalogCache where request.filter == .all {
             catalogs[Self.catalogKey(for: request)] = Array(page.items.prefix(72))
         }
         IOSJellyfinSnapshotCache.shared.save(
@@ -629,17 +632,39 @@ final class IOSJellyfinSession: ObservableObject {
     }
 
     private static func catalogKey(for request: JellyfinCatalogQuery) -> String {
-        [request.kind.rawValue, request.libraryID ?? "", request.sort.cacheKey].joined(separator: "|")
+        [
+            request.kind.rawValue,
+            request.libraryID ?? "",
+            request.genre ?? "",
+            request.studios.joined(separator: ","),
+            request.filter.rawValue,
+            request.sort.cacheKey
+        ].joined(separator: "|")
     }
 
     private static func catalogRequest(from key: String) -> JellyfinCatalogQuery? {
         let parts = key.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-        guard parts.count == 3,
+        // Read the pre-1.7 three-part key as well as the richer current key so
+        // an update never throws away a useful warm catalog snapshot.
+        if parts.count == 3,
+           let kind = JellyfinCatalogKind(rawValue: parts[0]),
+           let sort = SortOption(cacheKey: parts[2]) {
+            return JellyfinCatalogQuery(
+                kind: kind,
+                libraryID: parts[1].isEmpty ? nil : parts[1],
+                sort: sort
+            )
+        }
+        guard parts.count == 6,
               let kind = JellyfinCatalogKind(rawValue: parts[0]),
-              let sort = SortOption(cacheKey: parts[2]) else { return nil }
+              let filter = JellyfinCatalogFilter(rawValue: parts[4]),
+              let sort = SortOption(cacheKey: parts[5]) else { return nil }
         return JellyfinCatalogQuery(
             kind: kind,
             libraryID: parts[1].isEmpty ? nil : parts[1],
+            genre: parts[2].isEmpty ? nil : parts[2],
+            studios: parts[3].isEmpty ? [] : parts[3].split(separator: ",").map(String.init),
+            filter: filter,
             sort: sort
         )
     }

@@ -211,13 +211,6 @@ struct IOSJellyfinRootView: View {
 
 struct IOSJellyfinHomeView: View {
     @EnvironmentObject private var jellyfin: IOSJellyfinSession
-    @State private var mode = HomeMode.home
-
-    private enum HomeMode: String, CaseIterable, Identifiable {
-        case home = "Home"
-        case discover = "Discover"
-        var id: String { rawValue }
-    }
 
     var body: some View {
         NavigationStack {
@@ -233,13 +226,7 @@ struct IOSJellyfinHomeView: View {
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 28) {
-                            Picker("Browse", selection: $mode) {
-                                ForEach(HomeMode.allCases) { Text($0.rawValue).tag($0) }
-                            }
-                            .pickerStyle(.segmented)
-                            .padding(.horizontal)
-
-                            if let hero = visibleHubs.flatMap(\.items).first {
+                            if let hero = heroItem {
                                 IOSJellyfinHero(item: hero)
                             }
                             ForEach(visibleHubs) { hub in
@@ -249,9 +236,7 @@ struct IOSJellyfinHomeView: View {
                                     IOSJellyfinShelf(title: hub.title, items: hub.items)
                                 }
                             }
-                            if mode == .discover {
-                                IOSJellyfinDiscoveryGenreShelves()
-                            }
+                            IOSJellyfinDiscoveryGenreShelves()
                         }
                         .padding(.bottom, 30)
                     }
@@ -259,28 +244,29 @@ struct IOSJellyfinHomeView: View {
                     .task { await jellyfin.refreshContinueWatching() }
                 }
             }
-            .navigationTitle(mode.rawValue)
+            .navigationTitle("Home")
             .toolbar { IOSJellyfinAccountToolbar() }
             .navigationDestination(for: MediaItem.self) { IOSJellyfinDetailView(item: $0) }
         }
     }
 
     private var visibleHubs: [MediaHub] {
-        switch mode {
-        case .home:
-            let values = jellyfin.homeHubs.filter {
-                $0.title == "Continue Watching"
-                    || $0.title == "Top Picks for You"
-                    || $0.title == "Director’s Picks"
-                    || $0.title.hasPrefix("Favorite")
-            }
-            return values.isEmpty ? jellyfin.homeHubs : values
-        case .discover:
-            let values = jellyfin.homeHubs.filter {
-                $0.title != "Continue Watching" && $0.title != "Next Up"
-            }
-            return values.isEmpty ? jellyfin.homeHubs : values
+        // The paged rails below replace the short, synthesized genre hubs. All
+        // personalized, editorial, studio, watchlist and favorite hubs remain
+        // together in one streamlined Home/Discover surface.
+        jellyfin.homeHubs.filter {
+            $0.title != "Next Up" && !$0.id.contains(":discover:")
         }
+    }
+
+    private var heroItem: MediaItem? {
+        let preferred = ["Top Picks for You", "Director’s Picks", "Trending Movies", "Trending TV Shows"]
+        for title in preferred {
+            if let item = visibleHubs.first(where: { $0.title == title })?.items.first {
+                return item
+            }
+        }
+        return visibleHubs.lazy.flatMap(\.items).first { $0.kind == .movie || $0.kind == .show }
     }
 
     private var stateMessage: String {
@@ -321,10 +307,10 @@ private struct IOSJellyfinDiscoveryGenreShelves: View {
                 "Action", "Drama", "Comedy", "Crime", "Documentary",
                 "Family", "Animation", "Science Fiction", "Adventure"
             ]
-            let movies = prioritized(movieGenres, names: preferred).prefix(3).map {
+            let movies = prioritized(movieGenres, names: preferred).prefix(4).map {
                 Section(kind: .movies, genre: $0)
             }
-            let shows = prioritized(showGenres, names: preferred).prefix(3).map {
+            let shows = prioritized(showGenres, names: preferred).prefix(4).map {
                 Section(kind: .shows, genre: $0)
             }
             sections = interleaved(Array(movies), Array(shows))
@@ -356,23 +342,8 @@ private struct IOSJellyfinDiscoveryGenreShelf: View {
     let title: String
     let request: JellyfinCatalogQuery
 
-    @EnvironmentObject private var jellyfin: IOSJellyfinSession
-    @State private var items: [MediaItem] = []
-
     var body: some View {
-        Group {
-            if !items.isEmpty {
-                IOSJellyfinShelf(title: title, items: items)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-        }
-        .task(id: request) {
-            guard items.isEmpty else { return }
-            if let page = try? await jellyfin.catalog(request, pageSize: 24),
-               !Task.isCancelled {
-                withAnimation(.easeOut(duration: 0.24)) { items = page.items }
-            }
-        }
+        IOSJellyfinPagedCatalogShelf(title: title, request: request)
     }
 }
 
@@ -678,6 +649,7 @@ struct IOSJellyfinHero: View {
 struct IOSJellyfinShelf: View {
     let title: String
     let items: [MediaItem]
+    var onItemAppear: ((MediaItem) -> Void)? = nil
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     private var posterWidth: CGFloat { horizontalSizeClass == .regular ? 190 : 156 }
@@ -692,11 +664,57 @@ struct IOSJellyfinShelf: View {
                             IOSJellyfinPosterCard(item: item, width: posterWidth)
                         }
                         .buttonStyle(.plain)
+                        .onAppear { onItemAppear?(item) }
                     }
                 }
                 .padding(.horizontal)
             }
             .scrollIndicators(.hidden)
+        }
+    }
+}
+
+/// A cache-backed, endlessly paged shelf shared by Home and the movie/show
+/// catalogs. Only the first page blocks appearance; reaching the final few
+/// cards quietly appends the next page without replacing or flashing the rail.
+struct IOSJellyfinPagedCatalogShelf: View {
+    let title: String
+    let request: JellyfinCatalogQuery
+
+    @EnvironmentObject private var jellyfin: IOSJellyfinSession
+    @State private var items: [MediaItem] = []
+    @State private var hasMore = true
+    @State private var isLoadingMore = false
+
+    var body: some View {
+        Group {
+            if !items.isEmpty {
+                IOSJellyfinShelf(title: title, items: items, onItemAppear: loadMoreIfNeeded)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+        }
+        .task(id: request) { await loadInitial() }
+    }
+
+    private func loadInitial() async {
+        guard items.isEmpty else { return }
+        guard let page = try? await jellyfin.catalog(request, pageSize: 30),
+              !Task.isCancelled else { return }
+        items = page.items
+        hasMore = page.hasMore
+    }
+
+    private func loadMoreIfNeeded(_ item: MediaItem) {
+        guard hasMore, !isLoadingMore,
+              let index = items.firstIndex(where: { $0.ref == item.ref }),
+              index >= items.count - 7 else { return }
+        isLoadingMore = true
+        Task {
+            defer { isLoadingMore = false }
+            guard let page = try? await jellyfin.catalog(request, loadMore: true, pageSize: 30),
+                  !Task.isCancelled else { return }
+            items = page.items
+            hasMore = page.hasMore
         }
     }
 }

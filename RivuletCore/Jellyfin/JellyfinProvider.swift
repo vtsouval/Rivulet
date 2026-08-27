@@ -116,6 +116,12 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
                !genre.isEmpty {
                 query.append(URLQueryItem(name: "Genres", value: genre))
             }
+            let studios = request.studios
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            if !studios.isEmpty {
+                query.append(URLQueryItem(name: "Studios", value: studios.joined(separator: ",")))
+            }
             switch request.filter {
             case .favorites:
                 query.append(URLQueryItem(name: "Filters", value: "IsFavorite"))
@@ -372,10 +378,10 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
             JellyfinCatalogQuery(kind: .movies, filter: .favorites, sort: .addedAtDesc), limit: 24
         )
         async let topMovies = optionalCatalog(
-            JellyfinCatalogQuery(kind: .movies, sort: .ratingDesc), limit: 24
+            JellyfinCatalogQuery(kind: .movies, sort: .ratingDesc), limit: 72
         )
         async let topShows = optionalCatalog(
-            JellyfinCatalogQuery(kind: .shows, sort: .ratingDesc), limit: 24
+            JellyfinCatalogQuery(kind: .shows, sort: .ratingDesc), limit: 48
         )
         async let favoriteShows = optionalCatalog(
             JellyfinCatalogQuery(kind: .shows, filter: .favorites, sort: .addedAtDesc), limit: 24
@@ -395,17 +401,18 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         async let recommendedMovies = optionalRecommendations(itemType: "Movie", mode: "personal", limit: 24)
         async let recommendedShows = optionalRecommendations(itemType: "Series", mode: "personal", limit: 24)
         async let becauseMovies = optionalRecommendations(itemType: "Movie", mode: "because", limit: 20)
+        async let studioCollections = editorialStudioHubs()
 
         let (
             synced, continueItems, movieItems, showItems,
             movieFavorites, ratedMovies, ratedShows, showFavorites,
             movieWatchlist, showWatchlist, upcomingMovieItems, upcomingShowItems,
-            moviePicks, showPicks, because
+            moviePicks, showPicks, because, studioHubs
         ) = await (
             preferences, resumed, recentMovies, recentShows,
             favoriteMovies, topMovies, topShows, favoriteShows,
             watchlistMovies, watchlistShows, upcomingMovies, upcomingShows,
-            recommendedMovies, recommendedShows, becauseMovies
+            recommendedMovies, recommendedShows, becauseMovies, studioCollections
         )
         let showAnime = synced.animeEnabled ?? true
         func visible(_ items: [MediaItem]) -> [MediaItem] {
@@ -428,11 +435,32 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         if !editorial.isEmpty {
             result.append(MediaHub(id: "\(id):directors-picks", providerID: id, title: "Director’s Picks", style: .shelf, items: editorial))
         }
+        let trendingMovies = visible(dailyRotated(Array(ratedMovies.dropFirst(18)) + movieItems, limit: 24))
+        if !trendingMovies.isEmpty {
+            result.append(MediaHub(id: "\(id):trending-movies", providerID: id, title: "Trending Movies", style: .shelf, items: trendingMovies))
+        }
+        let trendingShows = visible(dailyRotated(ratedShows, limit: 24))
+        if !trendingShows.isEmpty {
+            result.append(MediaHub(id: "\(id):trending-shows", providerID: id, title: "Trending TV Shows", style: .shelf, items: trendingShows))
+        }
+        result.append(contentsOf: studioHubs.compactMap { hub in
+            let items = visible(hub.items)
+            return items.isEmpty ? nil : MediaHub(
+                id: hub.id, providerID: hub.providerID, title: hub.title,
+                style: hub.style, items: items
+            )
+        })
         result.append(contentsOf: genreHubs(
-            from: visible(interleaved(movieItems + ratedMovies, showItems + ratedShows)),
-            identityPrefix: "\(id):discover",
-            titleSuffix: "Movies & Shows",
-            maximum: 6
+            from: visible(movieItems + ratedMovies),
+            identityPrefix: "\(id):discover:movies",
+            titleSuffix: "Movies",
+            maximum: 4
+        ))
+        result.append(contentsOf: genreHubs(
+            from: visible(showItems + ratedShows),
+            identityPrefix: "\(id):discover:shows",
+            titleSuffix: "TV Shows",
+            maximum: 4
         ))
         if !movieItems.isEmpty {
             result.append(MediaHub(id: "\(id):recent-movies", providerID: id, title: "New Movies", style: .shelf, items: visible(movieItems)))
@@ -748,6 +776,51 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
 
     private func optionalCatalog(_ request: JellyfinCatalogQuery, limit: Int) async -> [MediaItem] {
         (try? await catalog(request, page: Page(offset: 0, limit: limit)).items) ?? []
+    }
+
+    /// Studio rails are optional editorial enhancements. They are fetched in
+    /// parallel and simply disappear when a library does not contain matching
+    /// metadata, keeping Home useful on servers with a different metadata agent.
+    private func editorialStudioHubs() async -> [MediaHub] {
+        async let appleMovies = optionalCatalog(
+            JellyfinCatalogQuery(
+                kind: .movies,
+                studios: ["Apple Original Films", "Apple Studios", "Apple TV+"],
+                sort: .releaseDateDesc
+            ),
+            limit: 30
+        )
+        async let appleShows = optionalCatalog(
+            JellyfinCatalogQuery(
+                kind: .shows,
+                studios: ["Apple TV+", "Apple Studios"],
+                sort: .releaseDateDesc
+            ),
+            limit: 30
+        )
+        async let disneyMovies = optionalCatalog(
+            JellyfinCatalogQuery(
+                kind: .movies,
+                studios: ["Walt Disney Pictures", "Disney", "Pixar"],
+                sort: .releaseDateDesc
+            ),
+            limit: 30
+        )
+        async let disneyShows = optionalCatalog(
+            JellyfinCatalogQuery(
+                kind: .shows,
+                studios: ["Disney+", "Disney Television Animation", "Disney"],
+                sort: .releaseDateDesc
+            ),
+            limit: 30
+        )
+        let (am, at, dm, dt) = await (appleMovies, appleShows, disneyMovies, disneyShows)
+        return [
+            MediaHub(id: "\(id):studio:apple:movies", providerID: id, title: "Apple TV · Movies", style: .shelf, items: am),
+            MediaHub(id: "\(id):studio:apple:shows", providerID: id, title: "Apple TV · TV Shows", style: .shelf, items: at),
+            MediaHub(id: "\(id):studio:disney:movies", providerID: id, title: "Disney · Movies", style: .shelf, items: dm),
+            MediaHub(id: "\(id):studio:disney:shows", providerID: id, title: "Disney · TV Shows", style: .shelf, items: dt)
+        ].filter { !$0.items.isEmpty }
     }
 
     private func optionalRecommendations(

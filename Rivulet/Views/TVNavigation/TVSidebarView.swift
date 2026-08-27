@@ -97,7 +97,10 @@ struct TVSidebarView: View {
                 mediaLibraries: providerLibraries,
                 liveTVSources: liveTVDataStore.sources,
                 combineLiveTV: combineLiveTVSources,
-                showDiscover: showDiscoverTab && authManager.hasCredentials,
+                // Jellyfin's editorial discovery is composed directly into
+                // Home. A second Discover destination duplicated the same
+                // recommendations and split resume context across two pages.
+                showDiscover: false,
                 discoverAbove: discoverAboveLibraries,
                 liveTVAbove: liveTVAboveLibraries,
                 serverName: session?.serverURL.host ?? "Jellyfin",

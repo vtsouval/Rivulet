@@ -25,23 +25,17 @@ struct IOSJellyfinCatalogView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVStack(spacing: 16) {
+                LazyVStack(spacing: 22) {
                     filterBar
-                    if filter == .all, genre == nil, !catalogHubs.isEmpty {
-                        if let hero = catalogHero {
-                            IOSJellyfinHero(item: hero)
-                                .padding(.bottom, 6)
-                        }
-                        ForEach(Array(catalogHubs.prefix(5))) { hub in
-                            IOSJellyfinShelf(title: hub.title, items: hub.items)
-                                .padding(.bottom, 8)
-                        }
+                    if filter == .all, genre == nil, !genres.isEmpty {
+                        IOSJellyfinCatalogGenreShelves(kind: kind, genres: genres)
+                    }
+                    if !items.isEmpty {
                         HStack {
-                            Text("All \(kind.title)").font(.title2.bold())
+                            Text(gridTitle).font(.title2.bold())
                             Spacer()
                         }
                         .padding(.horizontal)
-                        .padding(.top, 8)
                     }
                     if items.isEmpty, isLoading {
                         skeleton
@@ -88,38 +82,29 @@ struct IOSJellyfinCatalogView: View {
         }
     }
 
-    private var catalogHubs: [MediaHub] {
-        let expected: Set<MediaKind> = kind == .movies ? [.movie] : [.show, .episode]
-        return jellyfin.homeHubs.compactMap { hub in
-            let values = hub.items.filter { expected.contains($0.kind) }
-            guard !values.isEmpty else { return nil }
-            return MediaHub(
-                id: "\(hub.id):\(kind.rawValue)", providerID: hub.providerID,
-                title: hub.title, style: hub.style, items: values
-            )
-        }
-    }
-
-    /// Feature the library itself rather than a Next Up episode. Episode rows
-    /// remain available below, but the large catalog artwork now consistently
-    /// represents a movie or series.
-    private var catalogHero: MediaItem? {
-        let expected: MediaKind = kind == .movies ? .movie : .show
-        return catalogHubs.lazy.flatMap(\.items).first(where: { $0.kind == expected })
-            ?? catalogHubs.first?.items.first
+    private var gridTitle: String {
+        if let genre { return genre.name }
+        if filter != .all { return filter.title }
+        return sort == .addedAtDesc ? "Recently Added" : sort.title
     }
 
     private var filterBar: some View {
-        VStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Browse")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .padding(.horizontal)
             ScrollView(.horizontal) {
-                HStack(spacing: 8) {
+                HStack(spacing: 12) {
                     ForEach(JellyfinCatalogFilter.allCases) { option in
                         Button {
                             withAnimation(.snappy(duration: 0.28)) { filter = option }
                         } label: {
                             Label(option.title, systemImage: option.symbolName)
                                 .font(.subheadline.weight(.semibold))
-                                .padding(.horizontal, 14).padding(.vertical, 9)
+                                .padding(.horizontal, 16).padding(.vertical, 11)
+                                .frame(minHeight: 44)
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(filter == option ? Color.black : Color.primary)
@@ -131,15 +116,20 @@ struct IOSJellyfinCatalogView: View {
             }
             .scrollIndicators(.hidden)
 
+            Text("Genres")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .padding(.horizontal)
             ScrollView(.horizontal) {
-                HStack(spacing: 8) {
+                HStack(spacing: 12) {
                     genreButton(title: "All", value: nil)
                     ForEach(genres) { value in
                         genreButton(title: value.name, value: value)
                     }
                 }
                 .padding(.horizontal)
-                .padding(.vertical, 2)
+                .padding(.vertical, 3)
             }
             .scrollIndicators(.hidden)
 
@@ -157,6 +147,7 @@ struct IOSJellyfinCatalogView: View {
             }
             .font(.subheadline.weight(.semibold))
             .padding(.horizontal)
+            .padding(.top, 2)
         }
     }
 
@@ -169,7 +160,8 @@ struct IOSJellyfinCatalogView: View {
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
                 .padding(.horizontal, 14)
-                .padding(.vertical, 9)
+                .padding(.vertical, 11)
+                .frame(minHeight: 44)
         }
         .buttonStyle(.plain)
         .foregroundStyle(selected ? Color.black : Color.primary)
@@ -217,6 +209,38 @@ struct IOSJellyfinCatalogView: View {
                 error = nil
             } catch is CancellationError { }
             catch { self.error = IOSJellyfinSession.message(for: error) }
+        }
+    }
+}
+
+/// Library-specific, paged genre rails. Home-only material such as Continue
+/// Watching and Director's Picks never enters this surface.
+private struct IOSJellyfinCatalogGenreShelves: View {
+    let kind: JellyfinCatalogKind
+    let genres: [JellyfinCatalogGenre]
+
+    private var visibleGenres: [JellyfinCatalogGenre] {
+        let preferred = [
+            "Action", "Drama", "Comedy", "Crime", "Documentary",
+            "Science Fiction", "Thriller", "Family"
+        ]
+        let ordered = preferred.compactMap { name in
+            genres.first { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }
+        }
+        let used = Set(ordered.map(\.id))
+        return Array((ordered + genres.filter { !used.contains($0.id) }).prefix(8))
+    }
+
+    var body: some View {
+        ForEach(visibleGenres) { genre in
+            IOSJellyfinPagedCatalogShelf(
+                title: genre.name,
+                request: JellyfinCatalogQuery(
+                    kind: kind,
+                    genre: genre.name,
+                    sort: .ratingDesc
+                )
+            )
         }
     }
 }

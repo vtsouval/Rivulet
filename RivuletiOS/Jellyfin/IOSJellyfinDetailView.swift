@@ -42,6 +42,7 @@ struct IOSJellyfinDetailView: View {
                             .onScrollVisibilityChange(threshold: 0.52) { isVisible in
                                 trailerHeroIsVisible = isVisible
                             }
+                        primaryInformation
                         synopsis
                         metadata
                         if !people.isEmpty { castAndCrew }
@@ -51,19 +52,34 @@ struct IOSJellyfinDetailView: View {
                     .padding(.bottom, 36)
                 }
             }
-            .ignoresSafeArea(edges: .top)
-            .overlay(alignment: .topLeading) {
+        }
+        .navigationBarBackButtonHidden(true)
+        .navigationTitle("")
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
                 Button { dismiss() } label: {
-                    Image(systemName: "chevron.left").font(.title3.weight(.semibold)).frame(width: 44, height: 44)
+                    Image(systemName: "chevron.left")
+                        .font(.headline.weight(.semibold))
+                        .frame(width: 34, height: 34)
                 }
                 .buttonStyle(.plain)
-                .background(.ultraThinMaterial, in: Circle())
-                .padding(.leading, 16)
-                .padding(.top, max(8, geometry.safeAreaInsets.top))
+                .glassEffect(.regular.interactive(), in: .circle)
                 .accessibilityLabel("Back")
             }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if autoplayTrailers, trailerActive, !trailerFinished {
+                    Button { trailerManuallyPaused.toggle() } label: {
+                        Image(systemName: trailerManuallyPaused ? "play.fill" : "pause.fill")
+                    }
+                    .accessibilityLabel(trailerManuallyPaused ? "Resume trailer" : "Pause trailer")
+                    Button { trailerMuted.toggle() } label: {
+                        Image(systemName: trailerMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    }
+                    .accessibilityLabel(trailerMuted ? "Unmute trailer" : "Mute trailer")
+                }
+            }
         }
-        .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(for: MediaItem.self) { IOSJellyfinDetailView(item: $0) }
         .task { await load() }
         .onAppear { detailIsVisible = true }
@@ -74,12 +90,15 @@ struct IOSJellyfinDetailView: View {
 
     private func hero(size: CGSize) -> some View {
         let landscape = size.width > size.height
+        let height = landscape
+            ? min(size.height * 0.76, size.width * 9 / 16)
+            : min(size.height * 0.56, size.width * 1.2)
         return ZStack(alignment: .bottomLeading) {
             AsyncImage(url: displayedItem.artwork.backdrop ?? displayedItem.artwork.poster) { phase in
                 if case .success(let image) = phase { image.resizable().scaledToFill() }
                 else { LinearGradient(colors: [.gray.opacity(0.25), .black], startPoint: .top, endPoint: .bottom) }
             }
-            .frame(width: size.width, height: landscape ? size.width * 0.53 : size.height * 0.57)
+            .frame(width: size.width, height: height)
             .clipped()
 
             if autoplayTrailers, !trailerFinished, let trailerURL = detail?.trailerURL {
@@ -91,7 +110,7 @@ struct IOSJellyfinDetailView: View {
                     isFinished: $trailerFinished
                 )
                 .id(trailerURL.absoluteString)
-                .frame(width: size.width, height: landscape ? size.width * 0.53 : size.height * 0.57)
+                .frame(width: size.width, height: height)
                 .clipped()
                 // YouTube can draw a central play glyph while its iframe is
                 // paused even with controls disabled. Reveal the artwork in
@@ -102,58 +121,65 @@ struct IOSJellyfinDetailView: View {
             }
 
             LinearGradient(
-                stops: [.init(color: .clear, location: 0.25), .init(color: .black.opacity(0.96), location: 1)],
+                stops: [
+                    .init(color: .clear, location: 0.42),
+                    .init(color: .black.opacity(0.12), location: 0.68),
+                    .init(color: .black.opacity(0.92), location: 1)
+                ],
                 startPoint: .top,
                 endPoint: .bottom
             )
 
-            VStack(alignment: .leading, spacing: 13) {
-                if displayedItem.kind == .episode,
-                   let seriesTitle = displayedItem.seriesTitle,
-                   !seriesTitle.isEmpty {
-                    Text(seriesTitle)
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.78))
-                        .lineLimit(1)
-                }
-                Text(displayedItem.title)
-                    .font(.system(size: landscape ? 44 : 34, weight: .bold, design: .rounded))
-                    .lineLimit(2)
-                HStack(spacing: 9) {
-                    if let coordinate = displayedItem.episodeCoordinate { Text(coordinate) }
-                    if let year = displayedItem.year { Text(String(year)) }
-                    if let rating = detail?.contentRating ?? displayedItem.contentRating { Text(rating).detailPill() }
-                    if let duration = displayedItem.durationFormatted { Text(duration) }
-                    if let rating = detail?.rating { Label(String(format: "%.1f", rating), systemImage: "star.fill") }
-                }
-                .font(.subheadline).foregroundStyle(.white.opacity(0.78))
-                actionRow
-            }
+            titleArtwork(landscape: landscape)
             .padding(.horizontal, landscape ? 48 : 22)
-            .padding(.bottom, 24)
-
-            if autoplayTrailers, trailerActive, !trailerFinished {
-                HStack(spacing: 8) {
-                    Button { trailerManuallyPaused.toggle() } label: {
-                        Image(systemName: trailerManuallyPaused ? "play.fill" : "pause.fill")
-                            .frame(width: 40, height: 40)
-                    }
-                    .background(.ultraThinMaterial, in: Circle())
-                    .overlay { Circle().stroke(.white.opacity(0.14)) }
-                    Button { trailerMuted.toggle() } label: {
-                        Image(systemName: trailerMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                            .frame(width: 40, height: 40)
-                    }
-                    .background(.ultraThinMaterial, in: Circle())
-                    .overlay { Circle().stroke(.white.opacity(0.14)) }
-                }
-                .buttonStyle(.plain)
-                .padding(.trailing, 20)
-                .padding(.top, landscape ? 24 : 72)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            }
+            .padding(.bottom, 22)
         }
-        .frame(height: landscape ? size.width * 0.53 : size.height * 0.57)
+        .frame(height: height)
+        .clipped()
+    }
+
+    @ViewBuilder
+    private func titleArtwork(landscape: Bool) -> some View {
+        if let logoURL = displayedItem.artwork.logo
+            ?? displayedItem.grandparentArtwork?.logo
+            ?? displayedItem.parentArtwork?.logo {
+            AsyncImage(url: logoURL) { phase in
+                if case .success(let image) = phase {
+                    image.resizable().scaledToFit()
+                } else {
+                    Color.clear
+                }
+            }
+            .frame(maxWidth: landscape ? 380 : 270, maxHeight: landscape ? 120 : 92, alignment: .leading)
+            .accessibilityLabel(displayedItem.title)
+        } else {
+            Text(displayedItem.kind == .episode ? (displayedItem.seriesTitle ?? displayedItem.title) : displayedItem.title)
+                .font(.system(size: landscape ? 44 : 34, weight: .bold, design: .rounded))
+                .lineLimit(2)
+                .shadow(color: .black.opacity(0.65), radius: 8, y: 3)
+        }
+    }
+
+    private var primaryInformation: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if displayedItem.kind == .episode {
+                Text(displayedItem.title)
+                    .font(.title2.bold())
+                    .lineLimit(2)
+            }
+            HStack(spacing: 9) {
+                if let coordinate = displayedItem.episodeCoordinate { Text(coordinate) }
+                if let year = displayedItem.year { Text(String(year)) }
+                if let rating = detail?.contentRating ?? displayedItem.contentRating { Text(rating).detailPill() }
+                if let duration = displayedItem.durationFormatted { Text(duration) }
+                if let rating = detail?.rating { Label(String(format: "%.1f", rating), systemImage: "star.fill") }
+            }
+            .font(.subheadline)
+            .foregroundStyle(.white.opacity(0.78))
+            actionRow
+        }
+        .padding(.horizontal, 22)
+        .frame(maxWidth: 980, alignment: .leading)
     }
 
     private var trailerShouldPause: Bool {

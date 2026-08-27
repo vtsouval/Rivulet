@@ -124,6 +124,7 @@ final class JellyfinCatalogDTOTests: XCTestCase {
             kind: .shows,
             libraryID: "tv-library",
             genre: "Drama",
+            studios: ["Apple TV+", "Apple Studios"],
             filter: .unwatched,
             sort: .ratingDesc
         )
@@ -134,6 +135,22 @@ final class JellyfinCatalogDTOTests: XCTestCase {
         XCTAssertEqual(decoded, query)
         XCTAssertEqual(decoded.kind.includeItemTypes, "Series")
         XCTAssertEqual(decoded.filter.symbolName, "circle")
+        XCTAssertEqual(decoded.studios, ["Apple TV+", "Apple Studios"])
+    }
+
+    func testCatalogGenresExposeOnlyCanonicalNavigationChoices() {
+        let values = [
+            JellyfinCatalogGenre(id: "1", name: "Drama"),
+            JellyfinCatalogGenre(id: "2", name: "Korean"),
+            JellyfinCatalogGenre(id: "3", name: "Sci-Fi"),
+            JellyfinCatalogGenre(id: "4", name: "United States"),
+            JellyfinCatalogGenre(id: "5", name: "Comedy")
+        ]
+
+        let filtered = JellyfinCatalogGenre.standardOnly(values)
+
+        XCTAssertEqual(filtered.map(\.name), ["Comedy", "Drama", "Sci-Fi"])
+        XCTAssertFalse(filtered.contains { $0.name == "Korean" })
     }
 
     private func decode<T: Decodable>(_ json: String) throws -> T {

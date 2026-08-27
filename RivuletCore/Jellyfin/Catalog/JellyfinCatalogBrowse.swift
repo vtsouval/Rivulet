@@ -61,6 +61,10 @@ struct JellyfinCatalogQuery: Codable, Hashable, Sendable {
     let kind: JellyfinCatalogKind
     var libraryID: String?
     var genre: String?
+    /// Jellyfin studio names used by editorial Home shelves. The API treats
+    /// multiple values as alternatives, so one rail can cover a studio's
+    /// historical naming variants without a client-side full-catalog scan.
+    var studios: [String]
     var filter: JellyfinCatalogFilter
     var sort: SortOption
 
@@ -68,12 +72,14 @@ struct JellyfinCatalogQuery: Codable, Hashable, Sendable {
         kind: JellyfinCatalogKind,
         libraryID: String? = nil,
         genre: String? = nil,
+        studios: [String] = [],
         filter: JellyfinCatalogFilter = .all,
         sort: SortOption = .addedAtDesc
     ) {
         self.kind = kind
         self.libraryID = libraryID
         self.genre = genre
+        self.studios = studios
         self.filter = filter
         self.sort = sort
     }
@@ -82,4 +88,41 @@ struct JellyfinCatalogQuery: Codable, Hashable, Sendable {
 struct JellyfinCatalogGenre: Identifiable, Codable, Hashable, Sendable {
     let id: String
     let name: String
+}
+
+extension JellyfinCatalogGenre {
+    /// The intentionally small taxonomy used by the native catalog controls.
+    /// Metadata agents often emit languages, countries and marketing labels as
+    /// genres (for example "Korean"). Those values remain on the title, but do
+    /// not become top-level navigation choices.
+    static let standardOrder = [
+        "Action", "Adventure", "Animation", "Comedy", "Crime",
+        "Documentary", "Drama", "Family", "Fantasy", "History",
+        "Horror", "Music", "Mystery", "Romance", "Science Fiction",
+        "Thriller", "War", "Western"
+    ]
+
+    static func standardOnly(_ values: [JellyfinCatalogGenre]) -> [JellyfinCatalogGenre] {
+        let aliases: [String: String] = [
+            "sci fi": "Science Fiction", "sci-fi": "Science Fiction",
+            "science-fiction": "Science Fiction", "historical": "History",
+            "kids": "Family", "children": "Family"
+        ]
+        var byCanonical: [String: JellyfinCatalogGenre] = [:]
+        for value in values {
+            let raw = value.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let folded = raw.folding(
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: Locale(identifier: "en_US_POSIX")
+            )
+            let canonical = aliases[folded.lowercased()] ?? standardOrder.first {
+                $0.localizedCaseInsensitiveCompare(raw) == .orderedSame
+            }
+            guard let canonical, byCanonical[canonical] == nil else { continue }
+            // Preserve the exact server spelling in the query while presenting
+            // the canonical label in navigation.
+            byCanonical[canonical] = JellyfinCatalogGenre(id: value.id, name: raw)
+        }
+        return standardOrder.compactMap { byCanonical[$0] }
+    }
 }
