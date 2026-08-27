@@ -8,6 +8,7 @@ struct IOSJellyfinDetailView: View {
     let item: MediaItem
     @EnvironmentObject private var jellyfin: IOSJellyfinSession
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var detail: MediaItemDetail?
     @State private var episodes: [MediaItem] = []
     @State private var related: [MediaItem] = []
@@ -17,8 +18,10 @@ struct IOSJellyfinDetailView: View {
     @State private var error: String?
     @State private var isFavorite: Bool
     @State private var isOnWatchlist = false
-    @State private var trailerPaused = false
+    @State private var trailerManuallyPaused = false
     @State private var trailerActive = false
+    @State private var trailerFinished = false
+    @State private var trailerHeroIsVisible = true
     @State private var detailIsVisible = true
     @AppStorage("ios.autoplayTrailers") private var autoplayTrailers = true
     @AppStorage("ios.trailerMuted") private var trailerMuted = true
@@ -36,6 +39,9 @@ struct IOSJellyfinDetailView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 26) {
                         hero(size: geometry.size)
+                            .onScrollVisibilityChange(threshold: 0.52) { isVisible in
+                                trailerHeroIsVisible = isVisible
+                            }
                         synopsis
                         metadata
                         if !people.isEmpty { castAndCrew }
@@ -76,17 +82,21 @@ struct IOSJellyfinDetailView: View {
             .frame(width: size.width, height: landscape ? size.width * 0.53 : size.height * 0.57)
             .clipped()
 
-            if detailIsVisible, autoplayTrailers, let trailerURL = detail?.trailerURL {
+            if autoplayTrailers, !trailerFinished, let trailerURL = detail?.trailerURL {
                 IOSJellyfinTrailerView(
                     url: trailerURL,
                     isMuted: trailerMuted,
-                    isPaused: trailerPaused,
-                    isActive: $trailerActive
+                    shouldPlay: !trailerShouldPause,
+                    isActive: $trailerActive,
+                    isFinished: $trailerFinished
                 )
                 .id(trailerURL.absoluteString)
                 .frame(width: size.width, height: landscape ? size.width * 0.53 : size.height * 0.57)
                 .clipped()
-                .opacity(trailerActive ? 1 : 0)
+                // YouTube can draw a central play glyph while its iframe is
+                // paused even with controls disabled. Reveal the artwork in
+                // that state so only Rivulet's own controls remain visible.
+                .opacity(trailerActive && !trailerShouldPause ? 1 : 0)
                 .transition(.opacity.animation(.easeInOut(duration: 0.65)))
                 .allowsHitTesting(false)
             }
@@ -122,10 +132,10 @@ struct IOSJellyfinDetailView: View {
             .padding(.horizontal, landscape ? 48 : 22)
             .padding(.bottom, 24)
 
-            if autoplayTrailers, trailerActive {
+            if autoplayTrailers, trailerActive, !trailerFinished {
                 HStack(spacing: 8) {
-                    Button { trailerPaused.toggle() } label: {
-                        Image(systemName: trailerPaused ? "play.fill" : "pause.fill")
+                    Button { trailerManuallyPaused.toggle() } label: {
+                        Image(systemName: trailerManuallyPaused ? "play.fill" : "pause.fill")
                             .frame(width: 40, height: 40)
                     }
                     .background(.ultraThinMaterial, in: Circle())
@@ -144,6 +154,10 @@ struct IOSJellyfinDetailView: View {
             }
         }
         .frame(height: landscape ? size.width * 0.53 : size.height * 0.57)
+    }
+
+    private var trailerShouldPause: Bool {
+        trailerManuallyPaused || !trailerHeroIsVisible || !detailIsVisible || scenePhase != .active
     }
 
     private var actionRow: some View {
@@ -391,14 +405,17 @@ struct IOSJellyfinDetailView: View {
 private struct IOSJellyfinTrailerView: UIViewRepresentable {
     let url: URL
     let isMuted: Bool
-    let isPaused: Bool
+    let shouldPlay: Bool
     @Binding var isActive: Bool
+    @Binding var isFinished: Bool
 
     final class Coordinator: NSObject, WKScriptMessageHandler {
         var isActive: Binding<Bool>
+        var isFinished: Binding<Bool>
 
-        init(isActive: Binding<Bool>) {
+        init(isActive: Binding<Bool>, isFinished: Binding<Bool>) {
             self.isActive = isActive
+            self.isFinished = isFinished
         }
 
         func userContentController(
@@ -407,12 +424,22 @@ private struct IOSJellyfinTrailerView: UIViewRepresentable {
         ) {
             guard message.name == "rivuletTrailer", let state = message.body as? String else { return }
             Task { @MainActor in
-                self.isActive.wrappedValue = state == "playing"
+                switch state {
+                case "playing":
+                    self.isActive.wrappedValue = true
+                case "ended", "error":
+                    self.isActive.wrappedValue = false
+                    self.isFinished.wrappedValue = true
+                default:
+                    break
+                }
             }
         }
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(isActive: $isActive) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isActive: $isActive, isFinished: $isFinished)
+    }
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -422,6 +449,7 @@ private struct IOSJellyfinTrailerView: UIViewRepresentable {
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.isOpaque = false
         view.backgroundColor = .clear
+        view.isUserInteractionEnabled = false
         view.scrollView.isScrollEnabled = false
         view.scrollView.contentInsetAdjustmentBehavior = .never
         view.alpha = 0
@@ -433,12 +461,12 @@ private struct IOSJellyfinTrailerView: UIViewRepresentable {
         let muteCommand = isMuted
             ? "if(window.rivuletMute){window.rivuletMute();}"
             : "if(window.rivuletUnmute){window.rivuletUnmute();}"
-        let playCommand = isPaused
-            ? "if(window.rivuletPause){window.rivuletPause();}"
-            : "if(window.rivuletPlay){window.rivuletPlay();}"
+        let playCommand = shouldPlay
+            ? "if(window.rivuletPlay){window.rivuletPlay();}"
+            : "if(window.rivuletPause){window.rivuletPause();}"
         view.evaluateJavaScript(muteCommand)
         view.evaluateJavaScript(playCommand)
-        view.alpha = isActive ? 1 : 0
+        view.alpha = isActive && shouldPlay ? 1 : 0
     }
 
     static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) {
@@ -463,7 +491,7 @@ private struct IOSJellyfinTrailerView: UIViewRepresentable {
             </style></head>
             <body><div id="stage"><div id="player"></div></div><script src="https://www.youtube.com/iframe_api"></script><script>
             function notify(state){try{window.webkit.messageHandlers.rivuletTrailer.postMessage(state)}catch(e){}}
-            var player; function onYouTubeIframeAPIReady(){player=new YT.Player('player',{host:'https://www.youtube-nocookie.com',videoId:'\(videoID)',playerVars:{autoplay:1,controls:0,disablekb:1,enablejsapi:1,fs:0,iv_load_policy:3,modestbranding:1,playsinline:1,rel:0,origin:'https://flix.isma.sbs',widget_referrer:'https://flix.isma.sbs'},events:{onReady:function(e){\(muted ? "e.target.mute();" : "e.target.unMute();")e.target.playVideo();},onStateChange:function(e){if(e.data===YT.PlayerState.PLAYING){notify('playing')}else if(e.data===YT.PlayerState.ENDED){e.target.stopVideo();notify('ended')}},onError:function(){document.getElementById('player').innerHTML='';notify('error')}}});}
+            var player; function onYouTubeIframeAPIReady(){player=new YT.Player('player',{host:'https://www.youtube-nocookie.com',videoId:'\(videoID)',playerVars:{autoplay:1,controls:0,disablekb:1,enablejsapi:1,fs:0,iv_load_policy:3,loop:0,modestbranding:1,playsinline:1,rel:0,origin:'https://flix.isma.sbs',widget_referrer:'https://flix.isma.sbs'},events:{onReady:function(e){\(muted ? "e.target.mute();" : "e.target.unMute();")e.target.playVideo();},onStateChange:function(e){if(e.data===YT.PlayerState.PLAYING){notify('playing')}else if(e.data===YT.PlayerState.ENDED){e.target.stopVideo();notify('ended')}},onError:function(){document.getElementById('player').innerHTML='';notify('error')}}});}
             window.rivuletMute=function(){if(player&&player.mute)player.mute()}; window.rivuletUnmute=function(){if(player&&player.unMute)player.unMute()};
             window.rivuletPause=function(){if(player&&player.pauseVideo)player.pauseVideo()}; window.rivuletPlay=function(){if(player&&player.playVideo)player.playVideo()};
             window.rivuletStop=function(){if(player&&player.stopVideo)player.stopVideo();notify('ended')};
@@ -472,8 +500,8 @@ private struct IOSJellyfinTrailerView: UIViewRepresentable {
         }
         return """
         <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-        <style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000;object-fit:cover}</style></head><body>
-        <video id="player" src="\(escaped)" autoplay playsinline \(muted ? "muted" : "")></video><script>
+        <style>html,body,video{margin:0;width:100%;height:100%;overflow:hidden;background:#000;object-fit:cover}video::-webkit-media-controls{display:none!important}</style></head><body>
+        <video id="player" src="\(escaped)" autoplay playsinline disablepictureinpicture controlslist="nodownload noplaybackrate nofullscreen" \(muted ? "muted" : "")></video><script>
         function notify(state){try{window.webkit.messageHandlers.rivuletTrailer.postMessage(state)}catch(e){}}
         var player=document.getElementById('player'); window.rivuletMute=function(){player.muted=true}; window.rivuletUnmute=function(){player.muted=false};
         window.rivuletPause=function(){player.pause()}; window.rivuletPlay=function(){player.play()}; window.rivuletStop=function(){player.pause();player.removeAttribute('src');player.load()};

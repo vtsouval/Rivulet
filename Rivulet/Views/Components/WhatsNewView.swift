@@ -140,6 +140,12 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.6.4 (86)", [
+            "Detail-page trailers pause when their hero leaves view and resume from the same moment when it returns",
+            "Trailer playback is one-shot: completion restores the title artwork instead of looping or showing replay chrome",
+            "Embedded YouTube and HTML video controls stay hidden so only Rivulet's Liquid Glass pause and volume controls appear",
+            "Backgrounding, opening playback and leaving the detail page pause or stop trailer media cleanly",
+        ]),
         ("1.6.3 (85)", [
             "A new adaptive iPhone and iPad player places transport, utilities, metadata and options in distinct uncluttered layers",
             "Native AirPlay output and system volume controls stay directly available and follow hardware volume changes",
